@@ -38,8 +38,7 @@ var recording_dir: String = "user://recordings"
 @onready var record_timer = %RecordTimer # Make sure you added this Timer node
 
 @onready var background_texture = %BackgroundTexture
-@onready var bg_file_dialog = %SaveDialog # You can reuse your SaveDialog or create a new one
-
+@onready var bg_file_dialog = %BackgroundDialog 
 
 
 func _ready():
@@ -310,13 +309,21 @@ func _ready():
 	if has_node("%ChangeBGButton"):
 		%ChangeBGButton.pressed.connect(_on_change_bg_pressed)
 	
-	# Connect the dialog specifically for loading
-	bg_file_dialog.file_selected.connect(_on_bg_image_selected)
+	
+
+	if has_node("%BackgroundDialog"):
+		%BackgroundDialog.file_selected.connect(_on_bg_image_selected)
+
+
+
 
 func _on_change_bg_pressed():
-	bg_file_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
-	bg_file_dialog.filters = PackedStringArray(["*.png, *.jpg, *.jpeg ; Images"])
-	bg_file_dialog.popup_centered()
+	if has_node("%BackgroundDialog"):
+		%BackgroundDialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
+		%BackgroundDialog.filters = PackedStringArray(["*.png, *.jpg, *.jpeg ; Images"])
+		%BackgroundDialog.access = FileDialog.ACCESS_FILESYSTEM
+		%BackgroundDialog.current_dir = OS.get_system_dir(OS.SYSTEM_DIR_PICTURES)
+		%BackgroundDialog.popup_centered()
 	
 func _on_bg_image_selected(path: String):
 	var img = Image.load_from_file(path)
@@ -345,8 +352,6 @@ func _on_bg_image_selected(path: String):
 		
 		world_env.environment.background_mode = Environment.BG_SKY
 		world_env.environment.sky = sky
-		
-
 
 	
 	
@@ -520,6 +525,7 @@ func _on_screenshot_pressed():
 	# 5. Capture Frame
 	if has_node("%RenderContainer"):
 		%RenderContainer.visible = true
+	
 	await RenderingServer.frame_post_draw
 	_pending_screenshot = high_res_v.get_texture().get_image()
 	
@@ -528,11 +534,17 @@ func _on_screenshot_pressed():
 		%RenderContainer.visible = false
 	%PanelContainer.visible = true
 	
+	# 7. Show the Save Box (The Fix)
 	if has_node("%SaveDialog"):
-		# Set default filename with timestamp and fractal type
+		
 		var timestamp = str(Time.get_unix_time_from_system())
 		var fractal_name = current_fractal.to_lower()
+		
+		# Ensure this specific node is in SAVE mode so it doesn't trigger the BG loader
+		%SaveDialog.file_mode = FileDialog.FILE_MODE_SAVE_FILE 
 		%SaveDialog.current_file = fractal_name + "_" + timestamp + ".png"
+		
+		# Bring it to the front
 		%SaveDialog.popup_centered()
 
 func _on_dir_selected(path: String):

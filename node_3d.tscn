@@ -101,6 +101,12 @@ grow_vertical = 2
 mouse_filter = 2
 stretch_mode = 6
 
+[node name="BackgroundDialog" type="FileDialog" parent="CanvasLayer"]
+unique_name_in_owner = true
+title = "Open File(s)"
+file_mode = 1
+filters = PackedStringArray("*.png", "*.jpg")
+
 [node name="RenderContainer" type="SubViewportContainer" parent="CanvasLayer"]
 unique_name_in_owner = true
 visible = false
@@ -157,6 +163,10 @@ visible = false
 layout_mode = 2
 metadata/_tab_index = 0
 
+[node name="Versionlabel" type="Label" parent="CanvasLayer/PanelContainer/MenuScroll/VBoxContainer/HSplitContainer/TabContainer/Camera"]
+layout_mode = 2
+text = "Hyperion V1.1"
+
 [node name="ResetButton" type="Button" parent="CanvasLayer/PanelContainer/MenuScroll/VBoxContainer/HSplitContainer/TabContainer/Camera"]
 unique_name_in_owner = true
 layout_mode = 2
@@ -177,7 +187,7 @@ value = 1.0
 [node name="ScreenshotButton" type="Button" parent="CanvasLayer/PanelContainer/MenuScroll/VBoxContainer/HSplitContainer/TabContainer/Camera"]
 unique_name_in_owner = true
 layout_mode = 2
-text = "Take Screenshot"
+text = "Save image"
 
 [node name="SaveDialog" type="FileDialog" parent="CanvasLayer/PanelContainer/MenuScroll/VBoxContainer/HSplitContainer/TabContainer/Camera"]
 unique_name_in_owner = true
