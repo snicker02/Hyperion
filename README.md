@@ -1,3 +1,7 @@
+Hyperion V1.1
+
+fixed bugs with image saving
+----------------------------------------------------------------------------
 Hyperion V1.0 - 4D Fractal Explorer
 Hyperion is a high-performance generative art tool built in Godot for exploring and recording complex 4D fractals, including Mandelbox and Menger variations.
 
