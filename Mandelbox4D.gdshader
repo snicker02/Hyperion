@@ -25,7 +25,11 @@ uniform int MaxSteps : hint_range(32, 512) = 256;
 
 group_uniforms Fractal_Modes;
 uniform bool JuliaMode = false;
-uniform vec4 JuliaSeed = vec4(-0.5, 0.2, 0.0, 0.0);
+uniform vec4 JuliaSeed = vec4(0.0, 0.0, 0.0, 0.0);
+
+
+
+
 
 void vertex() {
 	POSITION = vec4(VERTEX.xy, 1.0, 1.0);
@@ -42,18 +46,18 @@ float getShape2CenterSqr(vec4 p, int type, float scale, float min_radius, float 
 	float r2 = dot(p, p);
 	
 	if (type == 0) {
-		// Standard sphere inversion
+		// Simple standard sphere (clean default)
 		id2 = scale * scale;
 	}
-	else if (type == 1) {
+		else if (type == 1) {
+		// 4D HYPERCUBE (Tesseract) inversion
+		float cube_r = max(max(abs(p.x), abs(p.y)), max(abs(p.z), abs(p.w)));
+		id2 = scale * scale / (cube_r * cube_r + 0.001);
+	}
+	else if (type == 2) {
 		// Box inversion
 		float box_r = max(max(abs(p.x), abs(p.y)), max(abs(p.z), abs(p.w)));
 		id2 = scale * scale / (box_r * box_r + 0.001);
-	}
-	else if (type == 2) {
-		// Octahedral inversion
-		float oct_r = abs(p.x) + abs(p.y) + abs(p.z) + abs(p.w);
-		id2 = scale * scale / (oct_r * oct_r + 0.001);
 	}
 	else if (type == 3) {
 		// Cylinder inversion (XY plane)
@@ -65,19 +69,15 @@ float getShape2CenterSqr(vec4 p, int type, float scale, float min_radius, float 
 		float pyr_r = max(max(abs(p.x), abs(p.y)), abs(p.z) + abs(p.w));
 		id2 = scale * scale / (pyr_r * pyr_r + 0.001);
 	}
-	// === TYPE 5: 4D POLYGON PRISM (Uses Polygon Sides Slider) ===
 	else if (type == 5) {
+		// 4D POLYGON PRISM (Uses Polygon Sides Slider)
 		int sides = int(clamp(param_b, 3.0, 20.0));
 		float angle = 6.283185 / float(sides);
 		
-		// Map position to polar coordinates in XY plane
 		float theta = atan(p.y, p.x);
-		
-		// Use cosine folding to find distance to nearest polygon edge
 		float edge_theta = floor(theta / angle + 0.5) * angle;
 		float poly_r = length(p.xy) * cos(theta - edge_theta);
 		
-		// 4D radius including Z and W components
 		float dist_r2 = poly_r * poly_r + p.z * p.z + p.w * p.w;
 		id2 = (scale * scale) / max(dist_r2, 0.00001);
 	}
@@ -86,14 +86,14 @@ float getShape2CenterSqr(vec4 p, int type, float scale, float min_radius, float 
 		float cross_r = min(min(abs(p.x), abs(p.y)), min(abs(p.z), abs(p.w)));
 		id2 = scale * scale / (cross_r * cross_r + 0.001);
 	}
-	// === TYPE 7: 4D TOROIDAL (Uses Inversion Param A for Major Radius) ===
 	else if (type == 7) {
+		// 4D TOROIDAL (Uses Inversion Param A for Major Radius)
 		float major_r = length(p.xy) - min_radius;
 		float torus_r2 = major_r * major_r + p.z * p.z + p.w * p.w;
 		id2 = scale * scale / (torus_r2 + 0.00001);
 	}
-	// === TYPE 8: AMAZING BOX (Uses Min Radius / Fixed Radius) ===
 	else if (type == 8) {
+		// Amazing Box
 		float min_r2 = min_radius * min_radius;
 		float fixed_r2 = scale * scale;
 		
@@ -130,27 +130,65 @@ void boxFold(inout vec4 p) {
 }
 
 float map(vec3 p3d, out vec4 orbit) {
-	float dr = 1.0;
-	orbit = vec4(1e20);
-	
-	vec4 p4d = vec4(p3d, OffsetW);
-	vec4 offset = JuliaMode ? JuliaSeed : p4d;
-	
-	for (int i = 0; i < Iterations; i++) {
-		p4d = rotate4D(p4d, RotationAngle);
-		apply_symmetry(p4d.xyz);
-		boxFold(p4d);
-		shapeFold(p4d, dr);
-		p4d = (p4d * Scale) + offset;
-		dr = (dr * abs(Scale)) + 1.0;
-		orbit = min(orbit, abs(p4d));
-		if (dot(p4d, p4d) > 1000.0) break;
-	}
-	
-	float box_size = abs(Scale - 1.0);
-	vec4 q = abs(p4d) - box_size;
-	return (length(max(q, 0.0)) + min(max(q.x, max(q.y, max(q.z, q.w))), 0.0)) / abs(dr);
+    float dr = 1.0;
+    orbit = vec4(1e20);
+    
+    vec4 p4d = vec4(p3d, OffsetW);
+    vec4 offset = JuliaMode ? JuliaSeed : p4d;
+    
+    for (int i = 0; i < Iterations; i++) {
+        // KIFS - back in action
+        kifs_fold(p4d, KIFS_Angle_X, KIFS_Angle_Y, KIFS_Angle_Z);
+        
+        // 4D Rotation
+        p4d = rotate4D(p4d, RotationAngle);
+        
+        // SYMMETRY - back in action
+        // Absolute value folds
+        if (F_absX) p4d.x = abs(p4d.x);
+        if (F_absY) p4d.y = abs(p4d.y);
+        if (F_absZ) p4d.z = abs(p4d.z);
+        
+       apply_symmetry(p4d.xyz);
+
+        
+        // Box fold
+        p4d = clamp(p4d, -BoxFoldLimit, BoxFoldLimit) * 2.0 - p4d;
+        
+        // Sphere fold - Type 0 uses hardcoded, others use shapeFold
+        if (InvType == 0) {
+            // HARDCODED BEAUTIFUL DEFAULT
+            float r2 = dot(p4d, p4d);
+            float minR2 = InvParamA * InvParamA;
+            float fixedR2 = InvScale * InvScale;
+            
+            if (r2 < minR2) {
+                float ratio = fixedR2 / minR2;
+                p4d *= ratio;
+                dr *= ratio;
+            } else if (r2 < fixedR2) {
+                float ratio = fixedR2 / r2;
+                p4d *= ratio;
+                dr *= ratio;
+            }
+        } else {
+            // All other types use shapeFold
+            shapeFold(p4d, dr);
+        }
+        
+        p4d = (p4d * Scale) + offset;
+        dr = dr * abs(Scale) + 1.0;
+        orbit = min(orbit, abs(p4d));
+        
+        if (dot(p4d, p4d) > 1000.0) break;
+    }
+    
+    float r = length(p4d);
+    return (r / abs(dr)) * 0.8;
 }
+
+
+
 
 vec3 get_normal(vec3 p) {
 	float e = 0.001;
@@ -170,52 +208,55 @@ void fragment() {
     p_ndc.x *= VIEWPORT_SIZE.x / VIEWPORT_SIZE.y;
     vec3 rd = normalize((INV_VIEW_MATRIX * vec4(p_ndc, -1.0, 0.0)).xyz);
     
-    float t = 0.05;
-    bool hit = false;
-    vec4 orbit;
-    
-    for (int i = 0; i < MaxSteps; i++) {
-        float d = map(ro + rd * t, orbit);
-        if (d < pow(10.0, Detail)) {
-            hit = true;
-            break;
-        }
-        t += d;
-        if (t > 40.0) break;
-    }
+ 
 
-    if (hit) {
-        vec3 p = ro + rd * t;
-        vec3 n = get_normal(p);
-        vec3 col = palette(length(orbit.xyz) * ColorCycle);
+        // Normal rendering code
+        float t = 0.05;
+        bool hit = false;
+        vec4 orbit;
         
-        vec3 light_dir = normalize(vec3(1.0, 1.0, -1.0));
-        float diff = max(dot(n, light_dir), 0.0) * 0.7 + 0.3;
-        col *= diff;
-        
-        vec3 view_dir = normalize(ro - p);
-        vec3 half_dir = normalize(light_dir + view_dir);
-        float spec = pow(max(dot(n, half_dir), 0.0), 32.0);
-        col += vec3(spec * 0.3);
-        
-        if (FogDensity > 0.0) {
-            float fog = 1.0 - exp(-t * FogDensity);
-            vec3 sky = texture(SCREEN_TEXTURE, SCREEN_UV).rgb;
-            col = mix(col, sky, fog);
+        for (int i = 0; i < MaxSteps; i++) {
+            float d = map(ro + rd * t, orbit);
+            if (d < pow(10.0, Detail)) {
+                hit = true;
+                break;
+            }
+            t += d;
+            if (t > 40.0) break;
         }
-        
-        if (Reflectivity > 0.0) {
-            vec3 ref_dir = reflect(rd, n);
-            vec2 ref_uv = clamp(SCREEN_UV + ref_dir.xy * 0.05, 0.0, 1.0);
-            vec3 reflection = texture(SCREEN_TEXTURE, ref_uv).rgb;
-            col = mix(col, reflection, Reflectivity);
+
+        if (hit) {
+            vec3 p = ro + rd * t;
+            vec3 n = get_normal(p);
+            vec3 col = palette(length(orbit.xyz) * ColorCycle);
+            
+            vec3 light_dir = normalize(vec3(1.0, 1.0, -1.0));
+            float diff = max(dot(n, light_dir), 0.0) * 0.7 + 0.3;
+            col *= diff;
+            
+            vec3 view_dir = normalize(ro - p);
+            vec3 half_dir = normalize(light_dir + view_dir);
+            float spec = pow(max(dot(n, half_dir), 0.0), 32.0);
+            col += vec3(spec * 0.3);
+            
+            if (FogDensity > 0.0) {
+                float fog = 1.0 - exp(-t * FogDensity);
+                vec3 sky = texture(SCREEN_TEXTURE, SCREEN_UV).rgb;
+                col = mix(col, sky, fog);
+            }
+            
+            if (Reflectivity > 0.0) {
+                vec3 ref_dir = reflect(rd, n);
+                vec2 ref_uv = clamp(SCREEN_UV + ref_dir.xy * 0.05, 0.0, 1.0);
+                vec3 reflection = texture(SCREEN_TEXTURE, ref_uv).rgb;
+                col = mix(col, reflection, Reflectivity);
+            }
+            
+            ALBEDO = apply_art_controls(col);
+            ALPHA = 1.0;
         }
-        
-        ALBEDO = apply_art_controls(col);
-        ALPHA = 1.0; // Solid fractal
+        else {
+            ALPHA = 0.0;
+            ALBEDO = vec3(0.0);
+        }
     }
-    else {
-        ALPHA = 0.0; // Transparent space for BG image
-        ALBEDO = vec3(0.0);
-    }
-}

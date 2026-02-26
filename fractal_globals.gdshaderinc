@@ -6,7 +6,7 @@
 group_uniforms Global_Rendering;
 uniform float Reflectivity : hint_range(0.0, 1.0) = 0.0;
 uniform float FogDensity : hint_range(0.0, 0.2) = 0.0;
-uniform int PaletteType : hint_range(0, 3) = 0;
+uniform int PaletteType : hint_range(0, 4) = 0;
 uniform float ColorCycle : hint_range(0.0, 10.0) = 0.15;
 uniform float ColorOffset : hint_range(0.0, 1.0) = 0.0;
 uniform float OffsetW : hint_range(-5.0, 5.0) = 0.0;
@@ -25,9 +25,17 @@ uniform bool F_Z = false;
 
 // Symmetry strength (0.5 = full symmetry, 0.0 = no effect)
 uniform vec3 SymmetryStrength = vec3(0.5);
-
 // Offset applied before/after folding
 uniform vec3 F_offset = vec3(0.0);
+
+uniform float KIFS_Angle_X : hint_range(0.0, 3.14) = 0.0;
+uniform float KIFS_Angle_Y : hint_range(0.0, 3.14) = 0.0;
+uniform float KIFS_Angle_Z : hint_range(0.0, 3.14) = 0.0;
+uniform vec3 KIFS_Axes = vec3(1.0, 1.0, 1.0); // The mask for X, Y, Z planes
+
+
+
+
 
 // Custom Gradient Colors
 uniform vec3 Color1 : source_color = vec3(1.0, 0.0, 0.0);
@@ -41,7 +49,14 @@ uniform float Brightness : hint_range(0.0, 2.0) = 1.0;
 // === GLOBAL COLORING ===
 group_uniforms Global_Coloring;
 
-
+// === AMAZING SURF ===
+group_uniforms Amazing_Surf;
+uniform bool EnableSurf = false;
+uniform float SurfScale : hint_range(0.0, 20.0) = 0.0;
+uniform float SurfStrength : hint_range(0.0, 2.0) = 0.0;
+uniform int SurfOctaves : hint_range(1, 8) = 1;
+uniform float SurfRoughness : hint_range(0.0, 1.0) = 0.0;
+uniform float SurfSpeed : hint_range(0.0, 2.0) = 0.0; 
 
 
 vec3 palette(float t) {
@@ -65,19 +80,17 @@ vec3 palette(float t) {
 // === SYMMETRY FOLDING FUNCTION ===
 // Applies various geometric symmetries to create complex fractal patterns
 // This function modifies the input point 'p' in place
-void apply_symmetry(inout vec3 p) {
+float apply_symmetry(inout vec3 p) {
+	// Apply offset BEFORE any folding
+	p += F_offset;
+	
 	// Step 1: Absolute Value Folds (mirror across coordinate planes)
 	if (F_absX) p.x = abs(p.x);
 	if (F_absY) p.y = abs(p.y);
 	if (F_absZ) p.z = abs(p.z);
 	
 	// Step 2: Plane Symmetry Folding
-	// This creates kaleidoscopic effects by conditionally swapping coordinates
-	// The formula: t = SymmetryStrength * (diff - abs(diff)) creates a conditional fold
-	// When diff > 0: no change, when diff < 0: fold occurs
-	
 	float t = 0.0;
-	p -= F_offset;
 	
 	if (F_X) {
 		t = p.x - p.z;
@@ -100,8 +113,15 @@ void apply_symmetry(inout vec3 p) {
 		p.z = p.z + t;
 	}
 	
-	p += F_offset;
+	// Remove offset after folding
+	p -= F_offset;
+	
+	return 1.0;
 }
+
+
+
+
 
 // === UTILITY FUNCTIONS ===
 
@@ -124,6 +144,41 @@ float hash(vec3 p) {
 	p += dot(p, p.yzx + 19.19);
 	return fract((p.x + p.y) * p.z);
 }
+
+
+// 3D noise function for Amazing Surf
+float noise3D(vec3 p) {
+    vec3 i = floor(p);
+    vec3 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f); // Smoothstep
+    
+    float n = i.x + i.y * 157.0 + 113.0 * i.z;
+    return mix(
+        mix(mix(hash(vec3(n + 0.0)), hash(vec3(n + 1.0)), f.x),
+            mix(hash(vec3(n + 157.0)), hash(vec3(n + 158.0)), f.x), f.y),
+        mix(mix(hash(vec3(n + 113.0)), hash(vec3(n + 114.0)), f.x),
+            mix(hash(vec3(n + 270.0)), hash(vec3(n + 271.0)), f.x), f.y),
+        f.z
+    );
+}
+
+// Fractal Brownian Motion for layered detail
+float fbm(vec3 p, int octaves, float roughness) {
+    float value = 0.0;
+    float amplitude = 0.5;
+    float frequency = 1.0;
+    
+    for (int i = 0; i < octaves; i++) {
+        value += amplitude * noise3D(p * frequency);
+        frequency *= 2.0;
+        amplitude *= roughness;
+    }
+    
+    return value;
+}
+
+
+
 vec3 apply_art_controls(vec3 color) {
     // Apply Brightness
     color *= Brightness;
@@ -136,4 +191,34 @@ vec3 apply_art_controls(vec3 color) {
     color = mix(vec3(luma), color, Saturation);
     
     return clamp(color, 0.0, 1.0);
+}
+
+// KIFS Rotation Logic
+void kifs_fold(inout vec4 p, float angle_x, float angle_y, float angle_z) {
+    // XY plane rotation
+    if (abs(angle_x) > 0.001) {
+        float s = sin(angle_x);
+        float c = cos(angle_x);
+        mat2 rot = mat2(vec2(c, -s), vec2(s, c));
+        p.xy = rot * p.xy;
+        p.xy = abs(p.xy);
+    }
+    
+    // YZ plane rotation
+    if (abs(angle_y) > 0.001) {
+        float s = sin(angle_y);
+        float c = cos(angle_y);
+        mat2 rot = mat2(vec2(c, -s), vec2(s, c));
+        p.yz = rot * p.yz;
+        p.yz = abs(p.yz);
+    }
+    
+    // XZ plane rotation
+    if (abs(angle_z) > 0.001) {
+        float s = sin(angle_z);
+        float c = cos(angle_z);
+        mat2 rot = mat2(vec2(c, -s), vec2(s, c));
+        p.xz = rot * p.xz;
+        p.xz = abs(p.xz);
+    }
 }

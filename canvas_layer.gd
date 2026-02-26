@@ -7,6 +7,8 @@ var _pending_screenshot: Image
 var time: float = 0.0 # Manual clock for the fractal
 var mandelbox_shader = preload("res://Mandelbox4D.gdshader")
 var menger_shader = preload("res://menger.gdshader")
+var amazingsurf_shader = preload("res://amazingsurf.gdshader")
+var bristorbrot_shader = preload("res://Bristorbrot.gdshader") # Ensure this path is correct
 var animation_tween: Tween # This allows us to pause and step the animation
 @onready var save_video_dialog = %SaveVideoDialog # Create a FileDialog in your scene
 # Track which fractal is currently active
@@ -39,7 +41,7 @@ var recording_dir: String = "user://recordings"
 
 @onready var background_texture = %BackgroundTexture
 @onready var bg_file_dialog = %BackgroundDialog 
-
+var is_playing_flythrough: bool = false
 
 func _ready():
 	if has_node("%ColorPicker1"):
@@ -154,6 +156,19 @@ func _ready():
 	if has_node("%SaveDialog"): 
 		%SaveDialog.file_selected.connect(_on_dir_selected)
 	
+	if has_node("%SavePresetButton"):
+		%SavePresetButton.pressed.connect(func(): %SavePresetDialog.popup_centered())
+
+	if has_node("%LoadPresetButton"):
+		%LoadPresetButton.pressed.connect(func(): %LoadPresetDialog.popup_centered())
+
+	# Connect the FileDialogs (Make sure you create these in your scene)
+	if has_node("%SavePresetDialog"):
+		%SavePresetDialog.file_selected.connect(save_preset)
+
+	if has_node("%LoadPresetDialog"):
+		%LoadPresetDialog.file_selected.connect(load_preset)
+	
 	# Initialize all labels to match the current shader state
 	if mat:
 		# Force the shader values to 0 for reflectivity and fog
@@ -224,6 +239,8 @@ func _ready():
 	
 	if has_node("%TypeSelector"):
 		%TypeSelector.selected = 0
+		if mat:
+			mat.set_shader_parameter("InvType", 0)
 	
 	if has_node("%PaletteSelector"):
 		%PaletteSelector.selected = 0
@@ -243,7 +260,15 @@ func _ready():
 		menger_iterations_slider.value_changed.connect(_update_menger)
 	if menger_rotation_slider:
 		menger_rotation_slider.value_changed.connect(_update_menger)
-	
+	if has_node("%MengerMaxStepsSlider"):
+		%MengerMaxStepsSlider.value_changed.connect(_on_menger_max_steps_changed)
+	# Set initial value from shader
+	mat = get_fractal_material()
+	if mat:
+		var steps = mat.get_shader_parameter("MaxSteps")
+		if steps != null:
+			%MengerMaxStepsSlider.value = steps
+			_on_menger_max_steps_changed(steps)
 	# Menger Offset 1 (X, Y, Z, W)
 	if menger_ox_slider:
 		menger_ox_slider.value_changed.connect(_update_menger)
@@ -313,9 +338,827 @@ func _ready():
 
 	if has_node("%BackgroundDialog"):
 		%BackgroundDialog.file_selected.connect(_on_bg_image_selected)
+	
+	if has_node("%KIFSAngleXSlider"):
+		%KIFSAngleXSlider.value_changed.connect(_on_kifs_angle_x_changed)
+
+# KIFS Angle Y
+	if has_node("%KIFSAngleYSlider"):
+		%KIFSAngleYSlider.value_changed.connect(_on_kifs_angle_y_changed)
+
+# KIFS Angle Z
+	if has_node("%KIFSAngleZSlider"):
+		%KIFSAngleZSlider.value_changed.connect(_on_kifs_angle_z_changed)
+
+# Run it once at startup to sync the initial state
+	_update_kifs_mask()
+
+
+# === Amazing Surf Complete Connections ===
+
+# MAIN TAB - Already done, but here for completeness
+	if has_node("%PowerSlider"):
+		%PowerSlider.value_changed.connect(_on_surf_power_changed)
+	if has_node("%SurfScaleSlider2"):
+		%SurfScaleSlider2.value_changed.connect(_on_surf_scale2_changed)
+	if has_node("%SurfIterationsSlider"):
+		%SurfIterationsSlider.value_changed.connect(_on_surf_iterations_changed)
+	if has_node("%BailoutSlider"):
+		%BailoutSlider.value_changed.connect(_on_surf_bailout_changed)
+
+	# FOLDING TAB
+	# Fold Slot Toggles
+	if has_node("%FoldSlot1Toggle"):
+		%FoldSlot1Toggle.toggled.connect(_on_fold_slot1_toggled)
+	if has_node("%FoldSlot2Toggle"):
+		%FoldSlot2Toggle.toggled.connect(_on_fold_slot2_toggled)
+	if has_node("%FoldSlot3Toggle"):
+		%FoldSlot3Toggle.toggled.connect(_on_fold_slot3_toggled)
+	if has_node("%FoldSlot4Toggle"):
+		%FoldSlot4Toggle.toggled.connect(_on_fold_slot4_toggled)
+	if has_node("%FoldSlot5Toggle"):
+		%FoldSlot5Toggle.toggled.connect(_on_fold_slot5_toggled)
+
+	# Fold Type Selectors
+	if has_node("%FoldType1Selector"):
+		%FoldType1Selector.item_selected.connect(_on_fold_type1_selected)
+	if has_node("%FoldType2Selector"):
+		%FoldType2Selector.item_selected.connect(_on_fold_type2_selected)
+	if has_node("%FoldType3Selector"):
+		%FoldType3Selector.item_selected.connect(_on_fold_type3_selected)
+	if has_node("%FoldType4Selector"):
+		%FoldType4Selector.item_selected.connect(_on_fold_type4_selected)
+	if has_node("%FoldType5Selector"):
+		%FoldType5Selector.item_selected.connect(_on_fold_type5_selected)
+	if has_node("%EnableZAxisToggle"):
+		%EnableZAxisToggle.toggled.connect(_on_enable_z_axis_toggled)
+	
+	# PARAMETERS TAB
+	if has_node("%FoldLimitXSlider"):
+		%FoldLimitXSlider.value_changed.connect(_on_fold_limit_x_changed)
+	if has_node("%FoldLimitYSlider"):
+		%FoldLimitYSlider.value_changed.connect(_on_fold_limit_y_changed)
+	if has_node("%FoldLimitZSlider"):
+		%FoldLimitZSlider.value_changed.connect(_on_fold_limit_z_changed)
+	if has_node("%FoldingValueSlider"):
+		%FoldingValueSlider.value_changed.connect(_on_folding_value_changed)
+	if has_node("%Offset2Slider"):
+		%Offset2Slider.value_changed.connect(_on_offset2_changed)
+
+	# SPHERE FOLD TAB
+	if has_node("%SphereFoldToggle"):
+		%SphereFoldToggle.toggled.connect(_on_sphere_fold_toggled)
+	if has_node("%MinRadiusSlider"):
+		%MinRadiusSlider.value_changed.connect(_on_min_radius_changed)
+	if has_node("%FixedRadiusSlider2"):
+		%FixedRadiusSlider2.value_changed.connect(_on_fixed_radius2_changed)
+	if has_node("%CylinderFoldToggle"):
+		%CylinderFoldToggle.toggled.connect(_on_cylinder_fold_toggled)
+	if has_node("%CylinderWeightSlider"):
+		%CylinderWeightSlider.value_changed.connect(_on_cylinder_weight_changed)
+
+	# TRANSFORMS TAB
+	# Pre-Offset
+	if has_node("%PreOffsetXSlider"):
+		%PreOffsetXSlider.value_changed.connect(_on_pre_offset_changed)
+	if has_node("%PreOffsetYSlider"):
+		%PreOffsetYSlider.value_changed.connect(_on_pre_offset_changed)
+	if has_node("%PreOffsetZSlider"):
+		%PreOffsetZSlider.value_changed.connect(_on_pre_offset_changed)
+
+	# Post-Offset
+	if has_node("%PostOffsetXSlider"):
+		%PostOffsetXSlider.value_changed.connect(_on_post_offset_changed)
+	if has_node("%PostOffsetYSlider"):
+		%PostOffsetYSlider.value_changed.connect(_on_post_offset_changed)
+	if has_node("%PostOffsetZSlider"):
+		%PostOffsetZSlider.value_changed.connect(_on_post_offset_changed)
+
+	# Rotation
+	if has_node("%ASurfRotationSlider"):
+		%ASurfRotationSlider.value_changed.connect(_on_asurf_rotation_changed)
+
+	# SURFACE TAB - Already done earlier
+	if has_node("%SurfScaleSlider"):
+		%SurfScaleSlider.value_changed.connect(_on_surf_scale_changed)
+	if has_node("%SurfStrengthSlider"):
+		%SurfStrengthSlider.value_changed.connect(_on_surf_strength_changed)
+	if has_node("%SurfOctavesSlider"):
+		%SurfOctavesSlider.value_changed.connect(_on_surf_octaves_changed)
+	if has_node("%SurfRoughnessSlider"):
+		%SurfRoughnessSlider.value_changed.connect(_on_surf_roughness_changed)
+	if has_node("%SurfSpeedSlider"):
+		%SurfSpeedSlider.value_changed.connect(_on_surf_speed_changed)
+
+	# Julia Mode for Amazing Surf
+	if has_node("%ASurfJuliaToggle"):
+		%ASurfJuliaToggle.toggled.connect(_on_asurf_julia_toggled)
+	if has_node("%ASurfJuliaXSlider"):
+		%ASurfJuliaXSlider.value_changed.connect(_on_asurf_julia_changed)
+	if has_node("%ASurfJuliaYSlider"):
+		%ASurfJuliaYSlider.value_changed.connect(_on_asurf_julia_changed)
+	if has_node("%ASurfJuliaZSlider"):
+		%ASurfJuliaZSlider.value_changed.connect(_on_asurf_julia_changed)
+
+	# 4D Folding Controls
+	if has_node("%EnableWAxisToggle"):
+		%EnableWAxisToggle.toggled.connect(_on_enable_w_axis_toggled)
+
+	if has_node("%FoldLimitWSlider"):
+		%FoldLimitWSlider.value_changed.connect(_on_fold_limit_w_changed)
+
+	# 4D Rotation Controls
+	if has_node("%RotationXWSlider"):
+		%RotationXWSlider.value_changed.connect(_on_rotation_xw_changed)
+	if has_node("%RotationYWSlider"):
+		%RotationYWSlider.value_changed.connect(_on_rotation_yw_changed)
+	if has_node("%RotationZWSlider"):
+		%RotationZWSlider.value_changed.connect(_on_rotation_zw_changed)
+	
+	
+	
+	if has_node("%RippleFrequencySlider"):
+		%RippleFrequencySlider.value_changed.connect(_on_ripple_frequency_changed)
+	if has_node("%RippleAmplitudeSlider"):
+		%RippleAmplitudeSlider.value_changed.connect(_on_ripple_amplitude_changed)
+		
+	if has_node("%DEMethodSelector"):
+		%DEMethodSelector.item_selected.connect(_on_de_method_selected)
+	if has_node("%DEMultiplierSlider"):
+		%DEMultiplierSlider.value_changed.connect(_on_de_multiplier_changed)
+
+	# Rendering Method
+	if has_node("%RenderingMethodSelector"):
+		var selector = %RenderingMethodSelector
+		# Disconnect old ones if they exist to prevent double-firing
+		if selector.item_selected.is_connected(_on_rendering_method_selected):
+			selector.item_selected.disconnect(_on_rendering_method_selected)
+		
+		selector.item_selected.connect(_on_rendering_method_selected)
+		
+		# Set default and force the first update
+		selector.selected = 0
+		_on_rendering_method_selected(0)
+	# Slice controls
+	if has_node("%SliceWSlider"):
+		%SliceWSlider.value_changed.connect(_on_slice_w_changed)
+	if has_node("%AnimateSliceWToggle"):
+		%AnimateSliceWToggle.toggled.connect(_on_animate_slice_w_toggled)
+	if has_node("%SliceWSpeedSlider"):
+		%SliceWSpeedSlider.value_changed.connect(_on_slice_w_speed_changed)
+	if has_node("%SliceZoomSlider"):
+		%SliceZoomSlider.value_changed.connect(_on_slice_zoom_changed)
+
+	# Volume controls
+	if has_node("%VolumeStepsSlider"):
+		%VolumeStepsSlider.value_changed.connect(_on_volume_steps_changed)
+	if has_node("%VolumeDensitySlider"):
+		%VolumeDensitySlider.value_changed.connect(_on_volume_density_changed)
+	if has_node("%VolumeBrightnessSlider"):
+		%VolumeBrightnessSlider.value_changed.connect(_on_volume_brightness_changed)
+
+	# NEW: Mandelbulber 3D Rotations (Alpha, Beta, Gamma)
+	if has_node("%AlphaRotationSlider"):
+		%AlphaRotationSlider.value_changed.connect(_on_alpha_rotation_changed)
+	if has_node("%BetaRotationSlider"):
+		%BetaRotationSlider.value_changed.connect(_on_beta_rotation_changed)
+	if has_node("%GammaRotationSlider"):
+		%GammaRotationSlider.value_changed.connect(_on_gamma_rotation_changed)
+
+	# NEW: Scale Vary
+	if has_node("%ScaleVarySlider"):
+		%ScaleVarySlider.value_changed.connect(_on_scale_vary_changed)
+	
+	
+	if has_node("%ASMaxStepsSlider"):
+		%ASMaxStepsSlider.value_changed.connect(_on_as_max_steps_changed)
+		
+	if has_node("%ASDetailSlider"):
+		%ASDetailSlider.value_changed.connect(_on_as_detail_changed)
+
+	%TimeSpeedSlider.value_changed.connect(_on_shader_param_changed.bind("time_speed"))
+	#%ZoomSlider.value_changed.connect(_on_shader_param_changed.bind("zoom"))
+	%ParallelToggle.toggled.connect(_on_shader_param_changed.bind("draw_parallel"))
+
+	if has_node("%WarpStrengthSlider"):
+		%WarpStrengthSlider.value_changed.connect(_on_warp_strength_changed)
+	if has_node("%WarpFrequencySlider"):
+		%WarpFrequencySlider.value_changed.connect(_on_warp_frequency_changed)
+
+	if has_node("%WOffsetSlider"):
+		%WOffsetSlider.value_changed.connect(_on_woffset_changed)
+	
+	if has_node("%KIFS_Axis_Selector"):
+		%KIFS_Axis_Selector.item_selected.connect(_on_kifs_axis_selected)
+	
+	if has_node("%KIFS_Sides_Slider"):
+		%KIFS_Sides_Slider.value_changed.connect(_on_kifs_sides_changed)
+		_on_kifs_sides_changed(%KIFS_Sides_Slider.value) # Initial label sync
+
+	if has_node("%KIFS_Twist_Slider"):
+		%KIFS_Twist_Slider.value_changed.connect(_on_kifs_twist_changed)
+		_on_kifs_twist_changed(%KIFS_Twist_Slider.value) # Initial label sync
 
 
 
+
+# === BristorBrot Parameter Updates ===
+
+func _on_woffset_changed(value: float):
+	var mat = get_fractal_material()
+	if mat:
+		mat.set_shader_parameter("WOffset", value)
+	if has_node("%WOffsetLabel"):
+		%WOffsetLabel.text = "W Offset: " + str(snapped(value, 0.01))
+
+
+func _on_warp_strength_changed(value: float):
+	var mat = get_fractal_material()
+	if mat:
+		mat.set_shader_parameter("WarpStrength", value)
+	if has_node("%WarpStrengthLabel"):
+		%WarpStrengthLabel.text = "Warp Strength: " + str(snapped(value, 0.01))
+
+func _on_warp_frequency_changed(value: float):
+	var mat = get_fractal_material()
+	if mat:
+		mat.set_shader_parameter("WarpFrequency", value)
+	if has_node("%WarpFrequencyLabel"):
+		%WarpFrequencyLabel.text = "Warp Frequency: " + str(snapped(value, 0.01))
+
+
+# === Amazing Surf Parameter Updates ===
+
+func _on_kifs_axis_selected(index: int):
+	var mat = get_fractal_material()
+	if mat:
+		# 0: XY, 1: XZ, 2: YZ
+		mat.set_shader_parameter("KIFS_Axis", index)
+
+func _on_kifs_sides_changed(value: float):
+	var mat = get_fractal_material()
+	if mat:
+		mat.set_shader_parameter("KIFS_Sides", value)
+	
+	if has_node("%KIFS_Sides_Label"):
+		%KIFS_Sides_Label.text = "Symmetry Sides: " + str(int(value))
+
+func _on_kifs_twist_changed(value: float):
+	var mat = get_fractal_material()
+	if mat:
+		mat.set_shader_parameter("KIFS_Twist", value)
+	
+	if has_node("%KIFS_Twist_Label"):
+		%KIFS_Twist_Label.text = "KIFS Twist: " + str(snapped(value, 0.01))
+
+
+func _on_as_max_steps_changed(value: float):
+	var mat = get_fractal_material()
+	if mat:
+		mat.set_shader_parameter("MaxSteps", int(value))
+	
+	if has_node("%ASMaxStepsLabel"):
+		%ASMaxStepsLabel.text = "Max Steps: " + str(int(value))
+
+func _on_as_detail_changed(value: float):
+	var mat = get_fractal_material()
+	if mat:
+		mat.set_shader_parameter("Detail", value)
+	
+	if has_node("%ASDetailLabel"):
+		# Using snapped(value, 0.01) makes the UI look much cleaner
+		%ASDetailLabel.text = "Detail: " + str(snapped(value, 0.01))
+
+
+
+func _on_scale_vary_changed(value: float):
+	var mat = get_fractal_material()
+	if mat:
+		mat.set_shader_parameter("ScaleVary", value)
+	if has_node("%ScaleVaryLabel"):
+		%ScaleVaryLabel.text = "Scale Vary: " + str(snapped(value, 0.01))
+
+func _update_euler_rotation():
+	var mat = get_fractal_material()
+	if mat and has_node("%AlphaRotationSlider") and has_node("%BetaRotationSlider") and has_node("%GammaRotationSlider"):
+		var euler = Vector3(
+			%AlphaRotationSlider.value,
+			%BetaRotationSlider.value,
+			%GammaRotationSlider.value
+		)
+		mat.set_shader_parameter("EulerRotation", euler)
+		
+		# Update labels if they exist
+		if has_node("%AlphaRotationLabel"): %AlphaRotationLabel.text = "Alpha (X): " + str(int(euler.x)) + "°"
+		if has_node("%BetaRotationLabel"): %BetaRotationLabel.text = "Beta (Y): " + str(int(euler.y)) + "°"
+		if has_node("%GammaRotationLabel"): %GammaRotationLabel.text = "Gamma (Z): " + str(int(euler.z)) + "°"
+
+func _on_alpha_rotation_changed(_value): _update_euler_rotation()
+func _on_beta_rotation_changed(_value):  _update_euler_rotation()
+func _on_gamma_rotation_changed(_value): _update_euler_rotation()
+
+func _on_rendering_method_selected(index: int):
+	print("Rendering method changed to: ", index)
+	var mat = get_fractal_material()
+	if mat:
+		mat.set_shader_parameter("RenderingMethod", index)
+		print("Set RenderingMethod to: ", index)
+		
+		# Show/hide appropriate controls
+		update_rendering_ui_visibility(index)
+
+func update_rendering_ui_visibility(mode: int):
+	# 1. List every node that should NOT be visible in certain modes
+	var to_hide = [
+		"%SliceWLabel", "%SliceWSlider", "%AnimateSliceWToggle",
+		"%SliceWSpeedLabel", "%SliceWSpeedSlider", "%SliceZoomLabel", "%SliceZoomSlider",
+		"%VolumeStepsLabel", "%VolumeStepsSlider", "%VolumeDensityLabel", 
+		"%VolumeDensitySlider", "%VolumeBrightnessLabel", "%VolumeBrightnessSlider",
+		"%ASMaxStepsLabel", "%ASMaxStepsSlider", 
+		"%ASDetailLabel", "%ASDetailSlider"
+	]
+	
+	# 2. Hide everything in that list first
+	for path in to_hide:
+		if has_node(path):
+			get_node(path).visible = false
+	
+	# 3. Bring back only the ones needed for the current mode
+	match mode:
+		0: # Raymarch Mode (Default)
+			# We want the Amazing Surf sliders back here!
+			if has_node("%ASMaxStepsLabel"): %ASMaxStepsLabel.visible = true
+			if has_node("%ASMaxStepsSlider"): %ASMaxStepsSlider.visible = true
+			if has_node("%ASDetailLabel"): %ASDetailLabel.visible = true
+			if has_node("%ASDetailSlider"): %ASDetailSlider.visible = true
+			
+		1: # Slice Mode
+			%SliceWLabel.visible = true
+			%SliceWSlider.visible = true
+			%AnimateSliceWToggle.visible = true
+			%SliceWSpeedLabel.visible = true
+			%SliceWSpeedSlider.visible = true
+			%SliceZoomLabel.visible = true
+			%SliceZoomSlider.visible = true
+			
+		2: # Volume Mode
+			%VolumeStepsLabel.visible = true
+			%VolumeStepsSlider.visible = true
+			%VolumeDensityLabel.visible = true
+			%VolumeDensitySlider.visible = true
+			%VolumeBrightnessLabel.visible = true
+			%VolumeBrightnessSlider.visible = true
+				
+				
+func _on_slice_w_changed(value: float):
+	var mat = get_fractal_material()
+	if mat:
+		mat.set_shader_parameter("SliceW", value)
+	if has_node("%SliceWLabel"):
+		%SliceWLabel.text = "Slice W: " + str(snapped(value, 0.01))
+
+func _on_animate_slice_w_toggled(pressed: bool):
+	var mat = get_fractal_material()
+	if mat:
+		mat.set_shader_parameter("AnimateSliceW", pressed)
+
+func _on_slice_w_speed_changed(value: float):
+	var mat = get_fractal_material()
+	if mat:
+		mat.set_shader_parameter("SliceWSpeed", value)
+	if has_node("%SliceWSpeedLabel"):
+		%SliceWSpeedLabel.text = "W Speed: " + str(snapped(value, 0.01))
+
+func _on_slice_zoom_changed(value: float):
+	var mat = get_fractal_material()
+	if mat:
+		mat.set_shader_parameter("SliceZoom", value)
+	if has_node("%SliceZoomLabel"):
+		%SliceZoomLabel.text = "Zoom: " + str(snapped(value, 0.1))
+
+func _on_volume_steps_changed(value: float):
+	var mat = get_fractal_material()
+	if mat:
+		mat.set_shader_parameter("VolumeSteps", int(value))
+	if has_node("%VolumeStepsLabel"):
+		%VolumeStepsLabel.text = "Volume Steps: " + str(int(value))
+
+func _on_volume_density_changed(value: float):
+	var mat = get_fractal_material()
+	if mat:
+		mat.set_shader_parameter("VolumeDensity", value)
+	if has_node("%VolumeDensityLabel"):
+		%VolumeDensityLabel.text = "Density: " + str(snapped(value, 0.1))
+
+func _on_volume_brightness_changed(value: float):
+	var mat = get_fractal_material()
+	if mat:
+		mat.set_shader_parameter("VolumeBrightness", value)
+	if has_node("%VolumeBrightnessLabel"):
+		%VolumeBrightnessLabel.text = "Brightness: " + str(snapped(value, 0.1))
+
+
+
+func _on_de_method_selected(index: int):
+	var mat = get_fractal_material()
+	if mat:
+		mat.set_shader_parameter("DEMethod", index)
+		print("DE Method changed to: ", ["Standard", "Box", "Hybrid"][index])
+
+
+func _on_de_multiplier_changed(value: float):
+	var mat = get_fractal_material()
+	if mat:
+		mat.set_shader_parameter("DEMultiplier", value)
+	if has_node("%DEMultiplierLabel"):
+		%DEMultiplierLabel.text = "DE Multiplier: " + str(snapped(value, 0.01))
+
+
+func _on_ripple_frequency_changed(value: float):
+	var mat = get_fractal_material()
+	if mat:
+		mat.set_shader_parameter("RippleFrequency", value)
+	if has_node("%RippleFrequencyLabel"):
+		%RippleFrequencyLabel.text = "Ripple Frequency: " + str(snapped(value, 0.1))
+
+func _on_ripple_amplitude_changed(value: float):
+	var mat = get_fractal_material()
+	if mat:
+		mat.set_shader_parameter("RippleAmplitude", value)
+	if has_node("%RippleAmplitudeLabel"):
+		%RippleAmplitudeLabel.text = "Ripple Amplitude: " + str(snapped(value, 0.01))
+
+
+
+func _on_fold_limit_x_changed(value: float):
+	var mat = get_fractal_material()
+	if mat:
+		var current = mat.get_shader_parameter("FoldLimit4D")
+		if current == null:
+			current = Vector4(1.0, 1.0, 1.0, 1.0)
+		mat.set_shader_parameter("FoldLimit4D", Vector4(value, current.y, current.z, current.w))
+	if has_node("%FoldLimitXLabel"):
+		%FoldLimitXLabel.text = "Fold Limit X: " + str(snapped(value, 0.01))
+
+func _on_fold_limit_y_changed(value: float):
+	var mat = get_fractal_material()
+	if mat:
+		var current = mat.get_shader_parameter("FoldLimit4D")
+		if current == null:
+			current = Vector4(1.0, 1.0, 1.0, 1.0)
+		mat.set_shader_parameter("FoldLimit4D", Vector4(current.x, value, current.z, current.w))
+	if has_node("%FoldLimitYLabel"):
+		%FoldLimitYLabel.text = "Fold Limit Y: " + str(snapped(value, 0.01))
+
+func _on_fold_limit_z_changed(value: float):
+	var mat = get_fractal_material()
+	if mat:
+		var current = mat.get_shader_parameter("FoldLimit4D")
+		if current == null:
+			current = Vector4(1.0, 1.0, 1.0, 1.0)
+		mat.set_shader_parameter("FoldLimit4D", Vector4(current.x, current.y, value, current.w))
+	if has_node("%FoldLimitZLabel"):
+		%FoldLimitZLabel.text = "Fold Limit Z: " + str(snapped(value, 0.01))
+
+
+# === 4D Folding Functions ===
+
+func _on_enable_w_axis_toggled(pressed: bool):
+	var mat = get_fractal_material()
+	if mat:
+		mat.set_shader_parameter("EnableWAxisFold", pressed)
+
+func _on_fold_limit_w_changed(value: float):
+	var mat = get_fractal_material()
+	if mat:
+		var current = mat.get_shader_parameter("FoldLimit4D")
+		if current == null:
+			current = Vector4(1.0, 1.0, 1.0, 1.0)
+		mat.set_shader_parameter("FoldLimit4D", Vector4(current.x, current.y, current.z, value))
+	if has_node("%FoldLimitWLabel"):
+		%FoldLimitWLabel.text = "Fold Limit W: " + str(snapped(value, 0.01))
+
+# === 4D Rotation Functions ===
+
+func _on_rotation_xw_changed(value: float):
+	var mat = get_fractal_material()
+	if mat:
+		mat.set_shader_parameter("RotationXW", value)
+	if has_node("%RotationXWLabel"):
+		%RotationXWLabel.text = "Rotation XW: " + str(snapped(value, 0.01))
+
+func _on_rotation_yw_changed(value: float):
+	var mat = get_fractal_material()
+	if mat:
+		mat.set_shader_parameter("RotationYW", value)
+	if has_node("%RotationYWLabel"):
+		%RotationYWLabel.text = "Rotation YW: " + str(snapped(value, 0.01))
+
+func _on_rotation_zw_changed(value: float):
+	var mat = get_fractal_material()
+	if mat:
+		mat.set_shader_parameter("RotationZW", value)
+	if has_node("%RotationZWLabel"):
+		%RotationZWLabel.text = "Rotation ZW: " + str(snapped(value, 0.01))
+
+
+func _on_asurf_julia_toggled(pressed: bool):
+	var mat = get_fractal_material()
+	if mat:
+		mat.set_shader_parameter("JuliaMode", pressed)
+
+func _on_asurf_julia_changed(_value: float):
+	var mat = get_fractal_material()
+	if mat and has_node("%ASurfJuliaXSlider") and has_node("%ASurfJuliaYSlider") and has_node("%ASurfJuliaZSlider"):
+		var seed = Vector3(
+			%ASurfJuliaXSlider.value,
+			%ASurfJuliaYSlider.value,
+			%ASurfJuliaZSlider.value
+		)
+		mat.set_shader_parameter("JuliaSeed", seed)
+		
+		if has_node("%ASurfJuliaXLabel"):
+			%ASurfJuliaXLabel.text = "Julia X: " + str(snapped(seed.x, 0.01))
+		if has_node("%ASurfJuliaYLabel"):
+			%ASurfJuliaYLabel.text = "Julia Y: " + str(snapped(seed.y, 0.01))
+		if has_node("%ASurfJuliaZLabel"):
+			%ASurfJuliaZLabel.text = "Julia Z: " + str(snapped(seed.z, 0.01))
+
+func _on_surf_power_changed(value: float):
+	var mat = get_fractal_material()
+	if mat:
+		mat.set_shader_parameter("Power", value)
+	if has_node("%PowerLabel"):
+		%PowerLabel.text = "Power: " + str(snapped(value, 0.1))
+
+func _on_surf_scale2_changed(value: float):
+	var mat = get_fractal_material()
+	if mat:
+		mat.set_shader_parameter("Scale", value)
+	if has_node("%SurfScaleLabel2"):
+		%SurfScaleLabel2.text = "Scale: " + str(snapped(value, 0.01))
+
+func _on_surf_iterations_changed(value: float):
+	var mat = get_fractal_material()
+	if mat:
+		mat.set_shader_parameter("Iterations", int(value))
+	if has_node("%SurfIterationsLabel"):
+		%SurfIterationsLabel.text = "Iterations: " + str(int(value))
+
+func _on_surf_bailout_changed(value: float):
+	var mat = get_fractal_material()
+	if mat:
+		mat.set_shader_parameter("Bailout", value)
+	if has_node("%BailoutLabel"):
+		%BailoutLabel.text = "Bailout: " + str(snapped(value, 0.1))
+
+func _on_surf_scale_changed(value: float):
+	var mat = get_fractal_material()
+	if mat:
+		mat.set_shader_parameter("SurfScale", value)
+	if has_node("%SurfScaleLabel"):
+		%SurfScaleLabel.text = "Surf Scale: " + str(snapped(value, 0.1))
+
+func _on_surf_strength_changed(value: float):
+	var mat = get_fractal_material()
+	if mat:
+		mat.set_shader_parameter("SurfStrength", value)
+	if has_node("%SurfStrengthLabel"):
+		%SurfStrengthLabel.text = "Surf Strength: " + str(snapped(value, 0.01))
+
+func _on_surf_octaves_changed(value: float):
+	var mat = get_fractal_material()
+	if mat:
+		mat.set_shader_parameter("SurfOctaves", int(value))
+	if has_node("%SurfOctavesLabel"):
+		%SurfOctavesLabel.text = "Surf Octaves: " + str(int(value))
+
+func _on_surf_roughness_changed(value: float):
+	var mat = get_fractal_material()
+	if mat:
+		mat.set_shader_parameter("SurfRoughness", value)
+	if has_node("%SurfRoughnessLabel"):
+		%SurfRoughnessLabel.text = "Surf Roughness: " + str(snapped(value, 0.01))
+
+func _on_surf_speed_changed(value: float):
+	var mat = get_fractal_material()
+	if mat:
+		mat.set_shader_parameter("SurfSpeed", value)
+	if has_node("%SurfSpeedLabel"):
+		%SurfSpeedLabel.text = "Surf Speed: " + str(snapped(value, 0.01))
+
+func _on_surf_julia_toggled(button_pressed: bool):
+	var mat = get_fractal_material()
+	if mat:
+		mat.set_shader_parameter("JuliaMode", button_pressed)
+		
+		
+		
+# === Amazing Surf Callback Functions ===
+
+# FOLDING TAB FUNCTIONS
+func _on_enable_z_axis_toggled(pressed: bool):
+	var mat = get_fractal_material()
+	if mat:
+		mat.set_shader_parameter("EnableZAxisFold", pressed)
+func _on_fold_slot1_toggled(pressed: bool):
+	var mat = get_fractal_material()
+	if mat:
+		mat.set_shader_parameter("FoldSlot1Enabled", pressed)
+
+func _on_fold_slot2_toggled(pressed: bool):
+	var mat = get_fractal_material()
+	if mat:
+		mat.set_shader_parameter("FoldSlot2Enabled", pressed)
+
+func _on_fold_slot3_toggled(pressed: bool):
+	var mat = get_fractal_material()
+	if mat:
+		mat.set_shader_parameter("FoldSlot3Enabled", pressed)
+
+func _on_fold_slot4_toggled(pressed: bool):
+	var mat = get_fractal_material()
+	if mat:
+		mat.set_shader_parameter("FoldSlot4Enabled", pressed)
+
+func _on_fold_slot5_toggled(pressed: bool):
+	var mat = get_fractal_material()
+	if mat:
+		mat.set_shader_parameter("FoldSlot5Enabled", pressed)
+
+func _on_fold_type1_selected(index: int):
+	var mat = get_fractal_material()
+	if mat:
+		mat.set_shader_parameter("FoldType1", index)
+
+func _on_fold_type2_selected(index: int):
+	var mat = get_fractal_material()
+	if mat:
+		mat.set_shader_parameter("FoldType2", index)
+
+func _on_fold_type3_selected(index: int):
+	var mat = get_fractal_material()
+	if mat:
+		mat.set_shader_parameter("FoldType3", index)
+
+func _on_fold_type4_selected(index: int):
+	var mat = get_fractal_material()
+	if mat:
+		mat.set_shader_parameter("FoldType4", index)
+
+func _on_fold_type5_selected(index: int):
+	var mat = get_fractal_material()
+	if mat:
+		mat.set_shader_parameter("FoldType5", index)
+
+# PARAMETERS TAB FUNCTIONS
+
+func _on_folding_value_changed(value: float):
+	var mat = get_fractal_material()
+	if mat:
+		mat.set_shader_parameter("FoldingValue", value)
+	if has_node("%FoldingValueLabel"):
+		%FoldingValueLabel.text = "Folding Value: " + str(snapped(value, 0.01))
+
+func _on_offset2_changed(value: float):
+	var mat = get_fractal_material()
+	if mat:
+		mat.set_shader_parameter("Offset2", value)
+	if has_node("%Offset2Label"):
+		%Offset2Label.text = "Offset 2: " + str(snapped(value, 0.01))
+
+# SPHERE FOLD TAB FUNCTIONS
+func _on_sphere_fold_toggled(pressed: bool):
+	var mat = get_fractal_material()
+	if mat:
+		mat.set_shader_parameter("SphereFoldEnabled", pressed)
+
+func _on_min_radius_changed(value: float):
+	var mat = get_fractal_material()
+	if mat:
+		mat.set_shader_parameter("MinRadius", value)
+	if has_node("%MinRadiusLabel"):
+		%MinRadiusLabel.text = "Min Radius: " + str(snapped(value, 0.01))
+
+func _on_fixed_radius2_changed(value: float):
+	var mat = get_fractal_material()
+	if mat:
+		mat.set_shader_parameter("FixedRadius", value)
+	if has_node("%FixedRadiusLabel2"):
+		%FixedRadiusLabel2.text = "Fixed Radius: " + str(snapped(value, 0.01))
+
+func _on_cylinder_fold_toggled(pressed: bool):
+	var mat = get_fractal_material()
+	if mat:
+		mat.set_shader_parameter("ForceCylinderFold", pressed)
+
+func _on_cylinder_weight_changed(value: float):
+	var mat = get_fractal_material()
+	if mat:
+		mat.set_shader_parameter("CylinderWeight", value)
+	if has_node("%CylinderWeightLabel"):
+		%CylinderWeightLabel.text = "Cylinder Weight: " + str(snapped(value, 0.01))
+
+# TRANSFORMS TAB FUNCTIONS
+func _on_pre_offset_changed(_value: float):
+	var mat = get_fractal_material()
+	if mat and has_node("%PreOffsetXSlider") and has_node("%PreOffsetYSlider") and has_node("%PreOffsetZSlider"):
+		var offset = Vector3(
+			%PreOffsetXSlider.value,
+			%PreOffsetYSlider.value,
+			%PreOffsetZSlider.value
+		)
+		mat.set_shader_parameter("PreOffset", offset)
+		
+		if has_node("%PreOffsetXLabel"):
+			%PreOffsetXLabel.text = "Pre-Offset X: " + str(snapped(offset.x, 0.01))
+		if has_node("%PreOffsetYLabel"):
+			%PreOffsetYLabel.text = "Pre-Offset Y: " + str(snapped(offset.y, 0.01))
+		if has_node("%PreOffsetZLabel"):
+			%PreOffsetZLabel.text = "Pre-Offset Z: " + str(snapped(offset.z, 0.01))
+
+func _on_post_offset_changed(_value: float):
+	var mat = get_fractal_material()
+	if mat and has_node("%PostOffsetXSlider") and has_node("%PostOffsetYSlider") and has_node("%PostOffsetZSlider"):
+		var offset = Vector3(
+			%PostOffsetXSlider.value,
+			%PostOffsetYSlider.value,
+			%PostOffsetZSlider.value
+		)
+		mat.set_shader_parameter("PostOffset", offset)
+		
+		if has_node("%PostOffsetXLabel"):
+			%PostOffsetXLabel.text = "Post-Offset X: " + str(snapped(offset.x, 0.01))
+		if has_node("%PostOffsetYLabel"):
+			%PostOffsetYLabel.text = "Post-Offset Y: " + str(snapped(offset.y, 0.01))
+		if has_node("%PostOffsetZLabel"):
+			%PostOffsetZLabel.text = "Post-Offset Z: " + str(snapped(offset.z, 0.01))
+
+func _on_asurf_rotation_changed(value: float):
+	var mat = get_fractal_material()
+	if mat:
+		mat.set_shader_parameter("RotationAngle", value)
+	if has_node("%ASurfRotationLabel"):
+		%ASurfRotationLabel.text = "Rotation: " + str(snapped(value, 0.01))
+		
+
+
+
+func _on_menger_max_steps_changed(value: float):
+	var mat = get_fractal_material()
+	if mat:
+		print("Setting Menger MaxSteps to: ", int(value))
+		print("Current shader: ", mat.shader.resource_path)
+		mat.set_shader_parameter("MaxSteps", int(value))
+		print("Shader reports MaxSteps is now: ", mat.get_shader_parameter("MaxSteps"))
+	
+	if has_node("%MengerMaxStepsLabel"):
+		%MengerMaxStepsLabel.text = "Max Steps: " + str(int(value))
+
+
+
+func _update_kifs_mask(_toggled_state: bool = false):
+	# Check if all nodes exist before trying to read them
+	if not has_node("%KIFS_X_Toggle") or not has_node("%KIFS_Y_Toggle") or not has_node("%KIFS_Z_Toggle"):
+		print("ERROR: KIFS toggle nodes not found!")
+		return
+		
+	# Create the mask: 1.0 for On, 0.0 for Off
+	var mask = Vector3(
+		1.0 if %KIFS_X_Toggle.button_pressed else 0.0,
+		1.0 if %KIFS_Y_Toggle.button_pressed else 0.0,
+		1.0 if %KIFS_Z_Toggle.button_pressed else 0.0
+	)
+	
+	# DEBUG: Print what we're sending to the shader
+	print("KIFS Mask: ", mask)
+	
+	var mat = get_fractal_material()
+	if mat:
+		mat.set_shader_parameter("KIFS_Axes", mask)
+		print("KIFS_Axes shader parameter set to: ", mat.get_shader_parameter("KIFS_Axes"))
+	else:
+		print("ERROR: No material found!")
+func _on_kifs_angle_x_changed(value: float):
+	var mat = get_fractal_material()
+	if mat:
+		mat.set_shader_parameter("KIFS_Angle_X", value)
+	if has_node("%KIFSAngleXLabel"):
+		%KIFSAngleXLabel.text = "KIFS X Twist: " + str(snapped(value, 0.01))
+
+func _on_kifs_angle_y_changed(value: float):
+	var mat = get_fractal_material()
+	if mat:
+		mat.set_shader_parameter("KIFS_Angle_Y", value)
+	if has_node("%KIFSAngleYLabel"):
+		%KIFSAngleYLabel.text = "KIFS Y Twist: " + str(snapped(value, 0.01))
+
+func _on_kifs_angle_z_changed(value: float):
+	var mat = get_fractal_material()
+	if mat:
+		mat.set_shader_parameter("KIFS_Angle_Z", value)
+	if has_node("%KIFSAngleZLabel"):
+		%KIFSAngleZLabel.text = "KIFS Z Twist: " + str(snapped(value, 0.01))
 
 func _on_change_bg_pressed():
 	if has_node("%BackgroundDialog"):
@@ -388,10 +1231,19 @@ func setup_navigation_tree():
 	menger.set_text(0, "Menger4D")
 	menger.set_metadata(0, 3) # Menger4D tab index
 	
+	var surf = %NavigationTree.create_item(fractal_node)  # NEW
+	surf.set_text(0, "Amazing Surf")  # NEW
+	surf.set_metadata(0, 4) 
+	
+	var bristor = %NavigationTree.create_item(fractal_node) # Changed 'surf' to 'bristor'
+	bristor.set_text(0, "BristorBrot") # Changed 'surf' to 'bristor'
+	bristor.set_metadata(0, 5) 
+	
 	# --- SYMMETRY ---
 	var sym = %NavigationTree.create_item(root)
 	sym.set_text(0, "Symmetry Folding")
-	sym.set_metadata(0, 4) # Symmetry tab index
+	sym.set_metadata(0, 6) 
+
 
 func _on_speed_changed(value: float):
 	# Find your Camera3D node - adjust the path if necessary
@@ -483,6 +1335,9 @@ func _input(event):
 				print("DebugUI child not found under RuntimeDebugTools")
 		else:
 			print("RuntimeDebugTools node not found at /root/")
+	# Press 'P' to add waypoint (NEW!)
+	if event is InputEventKey and event.pressed and event.keycode == KEY_P:
+		_on_add_waypoint_pressed()
 	# If 'R' is pressed while recording, stop it
 	if is_recording and event is InputEventKey and event.pressed:
 		if event.keycode == KEY_R:
@@ -643,31 +1498,123 @@ func _on_tree_item_selected():
 	if selected.get_text(0) == "Menger4D":
 		current_fractal = "Menger"
 		mat.shader = menger_shader
-		# Force reset Menger offsets to proper defaults
 		mat.set_shader_parameter("MengerOffset1", Vector4(1.0, 1.0, 1.0, 1.0))
 		mat.set_shader_parameter("OffsetW", 0.0)
 		mat.set_shader_parameter("RotationAngle", 0.0)
 		_update_menger()
+		
 	elif selected.get_text(0) == "Mandelbox":
 		current_fractal = "Mandelbox"
 		mat.shader = mandelbox_shader
-		# Sync Mandelbox-specific parameters
 		if has_node("%ScaleSlider"):
 			_on_scale_changed(%ScaleSlider.value)
 		if has_node("%WSlider"):
 			_on_w_changed(%WSlider.value)
 		if has_node("%RotationSlider"):
 			_on_rotation_changed(%RotationSlider.value)
-	
-	# Update UI to show which fractal is active
-	if has_node("%TabContainer"):
-		if current_fractal == "Menger":
-			print("Switched to Menger4D")
-		else:
-			print("Switched to Mandelbox")
+			
+	elif selected.get_text(0) == "Amazing Surf":
+		current_fractal = "AmazingSurf"
+		mat.shader = amazingsurf_shader
+		print("Switched to Amazing Surf")
+		if not is_playing_flythrough:
+			await RenderingServer.frame_post_draw
+			if not is_playing_flythrough:  # Check AGAIN after the await
+				_sync_asurf_to_shader()
+		
+	elif selected.get_text(0) == "BristorBrot":
+		current_fractal = "BristorBrot"
+		mat.shader = bristorbrot_shader
+		mat.set_shader_parameter("time_speed", %TimeSpeedSlider.value)
+		mat.set_shader_parameter("draw_parallel", %ParallelToggle.button_pressed)
+		# Restore current color picker values instead of resetting to defaults
+		if has_node("%ColorPicker1"):
+			var c1 = %ColorPicker1.color
+			mat.set_shader_parameter("Color1", Vector3(c1.r, c1.g, c1.b))
+		if has_node("%ColorPicker2"):
+			var c2 = %ColorPicker2.color
+			mat.set_shader_parameter("Color2", Vector3(c2.r, c2.g, c2.b))
+		if has_node("%ColorPicker3"):
+			var c3 = %ColorPicker3.color
+			mat.set_shader_parameter("Color3", Vector3(c3.r, c3.g, c3.b))
+		print("Switched to BristorBrot")
+
 	
 	if OS.is_debug_build():
 		diagnostic_check()
+
+func _sync_asurf_to_shader():
+	if is_playing_flythrough: return
+	var mat = get_fractal_material()
+	if not mat: return
+	
+	# Main
+	_on_surf_power_changed(get_v("%PowerSlider", 0.0))
+	_on_as_max_steps_changed(get_v("%ASMaxStepsSlider", 64))
+	_on_as_detail_changed(get_v("%ASDetailSlider", -1.0))
+	_on_surf_scale2_changed(get_v("%SurfScaleSlider2", 2.0))
+	_on_surf_iterations_changed(get_v("%SurfIterationsSlider", 12))
+	_on_surf_bailout_changed(get_v("%BailoutSlider", 4.0))
+	
+	# Surface
+	_on_surf_scale_changed(get_v("%SurfScaleSlider", 0.0))
+	_on_surf_strength_changed(get_v("%SurfStrengthSlider", 0.0))
+	_on_surf_roughness_changed(get_v("%SurfRoughnessSlider", 0.0))
+	_on_surf_octaves_changed(get_v("%SurfOctavesSlider", 4.0))
+	_on_surf_speed_changed(get_v("%SurfSpeedSlider", 0.0))
+	
+	# Transforms
+	_on_pre_offset_changed(0.0)
+	_on_post_offset_changed(0.0)
+	_on_asurf_rotation_changed(get_v("%ASurfRotationSlider", 0.0))
+	_on_alpha_rotation_changed(get_v("%AlphaRotationSlider", 0.0))
+	_on_beta_rotation_changed(get_v("%BetaRotationSlider", 0.0))
+	_on_gamma_rotation_changed(get_v("%GammaRotationSlider", 0.0))
+	
+	# Folding
+	_on_fold_limit_x_changed(get_v("%FoldLimitXSlider", 1.0))
+	_on_fold_limit_y_changed(get_v("%FoldLimitYSlider", 1.0))
+	_on_fold_limit_z_changed(get_v("%FoldLimitZSlider", 1.0))
+	_on_fold_limit_w_changed(get_v("%FoldLimitWSlider", 1.0))
+	_on_folding_value_changed(get_v("%FoldingValueSlider", 2.0))
+	_on_offset2_changed(get_v("%Offset2Slider", 0.0))
+	
+	# Sphere Fold
+	_on_min_radius_changed(get_v("%MinRadiusSlider", 0.5))
+	_on_fixed_radius2_changed(get_v("%FixedRadiusSlider2", 1.0))
+	_on_cylinder_weight_changed(get_v("%CylinderWeightSlider", 1.0))
+	
+	# KIFS
+	_on_kifs_sides_changed(get_v("%KIFS_Sides_Slider", 6.0))
+	_on_kifs_twist_changed(get_v("%KIFS_Twist_Slider", 0.0))
+	
+	# Julia
+	_on_asurf_julia_changed(0.0)
+	
+	# States (toggles snap directly)
+	if mat.get_shader_parameter("EnableZAxisFold") != null:
+		mat.set_shader_parameter("EnableZAxisFold", get_b("%EnableZAxisToggle"))
+	if mat.get_shader_parameter("EnableWAxisFold") != null:
+		mat.set_shader_parameter("EnableWAxisFold", get_b("%EnableWAxisToggle"))
+	if mat.get_shader_parameter("SphereFoldEnabled") != null:
+		mat.set_shader_parameter("SphereFoldEnabled", get_b("%SphereFoldToggle"))
+	if mat.get_shader_parameter("ForceCylinderFold") != null:
+		mat.set_shader_parameter("ForceCylinderFold", get_b("%CylinderFoldToggle"))
+	if mat.get_shader_parameter("JuliaMode") != null:
+		mat.set_shader_parameter("JuliaMode", get_b("%ASurfJuliaToggle"))
+	if mat.get_shader_parameter("FoldSlot1Enabled") != null:
+		mat.set_shader_parameter("FoldSlot1Enabled", get_b("%FoldSlot1Toggle"))
+	if mat.get_shader_parameter("FoldSlot2Enabled") != null:
+		mat.set_shader_parameter("FoldSlot2Enabled", get_b("%FoldSlot2Toggle"))
+	if mat.get_shader_parameter("FoldSlot3Enabled") != null:
+		mat.set_shader_parameter("FoldSlot3Enabled", get_b("%FoldSlot3Toggle"))
+	if mat.get_shader_parameter("FoldSlot4Enabled") != null:
+		mat.set_shader_parameter("FoldSlot4Enabled", get_b("%FoldSlot4Toggle"))
+	if mat.get_shader_parameter("FoldSlot5Enabled") != null:
+		mat.set_shader_parameter("FoldSlot5Enabled", get_b("%FoldSlot5Toggle"))
+
+	print("Amazing Surf shader synced to UI values.")
+
 
 func _on_pfive_changed(value: float):
 	var mat = get_fractal_material()
@@ -682,10 +1629,14 @@ func _on_fold_offset_changed(value: float):
 	var mat = get_fractal_material()
 	if mat:
 		# Updating F_offset as a uniform vec3
-		mat.set_shader_parameter("F_offset", Vector3(value, value, value))
+		var offset_vec = Vector3(value, value, value)
+		mat.set_shader_parameter("F_offset", offset_vec)
+		print("F_offset set to: ", offset_vec)
+		print("Shader confirms F_offset is: ", mat.get_shader_parameter("F_offset"))
 	
 	if has_node("%FoldOffsetLabel"):
 		%FoldOffsetLabel.text = "Fold Offset: " + str(snapped(value, 0.01))
+
 
 func _on_rotation_changed(value: float):
 	var mat = get_fractal_material()
@@ -880,44 +1831,403 @@ func _on_add_waypoint_pressed():
 	
 	var point = {
 		"pos": main_camera.global_position,
-		"rot": main_camera.global_transform.basis, # Basis captures full rotation state
-		"w": %WSlider.value,
-		"sat": %SaturationSlider.value,
-		"con": %ContrastSlider.value
+		"rot": main_camera.global_transform.basis,
+		"w": get_v("%WSlider"), # Now calls the function at the bottom
+		
+		"floats": {
+			# Main
+			"SymmetryStrength": Vector3(get_v("%PFiveSlider"), get_v("%PFiveSlider"), get_v("%PFiveSlider")),
+			"F_offset": Vector3(get_v("%FoldOffsetSlider"), get_v("%FoldOffsetSlider"), get_v("%FoldOffsetSlider")),
+			"Power": get_v("%PowerSlider"),
+			"Scale": get_v("%SurfScaleSlider2", 2.0) if current_fractal == "AmazingSurf" else get_v("%ScaleSlider", 2.0),
+			"Bailout": get_v("%BailoutSlider", 4.0) if current_fractal == "AmazingSurf" else get_v("%BailoutSlider", 100.0),
+			"ScaleVary": get_v("%ScaleVarySlider"),
+			"DEMultiplier": get_v("%DEMultiplierSlider", 1.0),
+			"MengerScale": get_v("%MengerScaleSlider", 1.0),
+			"InvParamA": get_v("%InvParamA"),
+			"InvScale": get_v("%FixedRadiusSlider"),
+			"RotationAngle": get_v("%ASurfRotationSlider", 0.0) if current_fractal == "AmazingSurf" else get_v("%RotationSlider"),
+			"Reflectivity": get_v("%ReflectSlider"),
+			"FogDensity": get_v("%FogSlider"),
+			"Brightness": get_v("%BrightnessSlider", 1.0),
+			"Iterations": get_v("%SurfIterationsSlider", 12),
+			
+			# Folding (Using Vector4 for the shader uniform)
+			"FoldLimit4D": Vector4(
+				get_v("%FoldLimitXSlider", 1.0), 
+				get_v("%FoldLimitYSlider", 1.0), 
+				get_v("%FoldLimitZSlider", 1.0), 
+				get_v("%FoldLimitWSlider", 1.0)
+			),
+			"FoldingValue": get_v("%FoldingValueSlider"),
+			"Offset2": get_v("%Offset2Slider"),
+			
+			# Transforms
+			"PreOffset": Vector3(get_v("%PreOffsetXSlider"), get_v("%PreOffsetYSlider"), get_v("%PreOffsetZSlider")),
+			"PostOffset": Vector3(get_v("%PostOffsetXSlider"), get_v("%PostOffsetYSlider"), get_v("%PostOffsetZSlider")),
+			"EulerRotation": Vector3(get_v("%AlphaRotationSlider"), get_v("%BetaRotationSlider"), get_v("%GammaRotationSlider")),
+			"KIFS_Sides": get_v("%KIFS_Sides_Slider", 6.0),
+			"KIFS_Twist": get_v("%KIFS_Twist_Slider", 0.0),
+			"KIFS_Axis": float(max(0, %KIFS_Axis_Selector.selected)) if has_node("%KIFS_Axis_Selector") else 0.0,
+
+			# Amazing Surf Specifics
+			"JuliaSeed": Vector4(
+				get_v("%ASurfJuliaXSlider"), 
+				get_v("%ASurfJuliaYSlider"), 
+				get_v("%ASurfJuliaZSlider"), 
+				0.0 # The 4th component to make it a Vector4
+			),
+			"SurfScale": get_v("%SurfScaleSlider"),
+			"SurfStrength": get_v("%SurfStrengthSlider"),
+			"SurfRoughness": get_v("%SurfRoughnessSlider"),
+			"SurfSpeed": get_v("%SurfSpeedSlider"),
+			"MaxSteps": int(get_v("%ASMaxStepsSlider", 64)),
+			"Detail": get_v("%ASDetailSlider", -1.0),
+			
+			
+			
+			"MengerOffset1": Vector4(
+				get_v("%MengerOffset1_xSlider", 1.0), 
+				get_v("%MengerOffset1_ySlider", 1.0), 
+				get_v("%MengerOffset1_zSlider", 1.0), 
+				get_v("%MengerOffset1_wSlider", 1.0),
+			),
+			# BristorBrot / Warp Parameters
+				"WOffset": get_v("%WOffsetSlider"),
+				"WarpStrength": get_v("%WarpStrengthSlider"),
+				"WarpFrequency": get_v("%WarpFrequencySlider"),
+
+				# 4D Plane Rotations (From your ASurf section)
+				"RotationXW": get_v("%RotationXWSlider"),
+				"RotationYW": get_v("%RotationYWSlider"),
+				"RotationZW": get_v("%RotationZWSlider"),
+
+				# Ripple/Deformation Logic
+				"RippleFrequency": get_v("%RippleFrequencySlider"),
+				"RippleAmplitude": get_v("%RippleAmplitudeSlider"),
+
+				# KIFS Twists (You have individual sliders for these)
+				"KIFS_Angle_X": get_v("%KIFSAngleXSlider"),
+				"KIFS_Angle_Y": get_v("%KIFSAngleYSlider"),
+				"KIFS_Angle_Z": get_v("%KIFSAngleZSlider"),
+			# Rendering
+			"SliceW": get_v("%SliceWSlider"),
+			"VolumeDensity": get_v("%VolumeDensitySlider"),
+			"Saturation": get_v("%SaturationSlider", 1.0),
+			"Contrast": get_v("%ContrastSlider", 1.0)
+			
+			
+			
+		},
+		
+		"states": {
+			"JuliaMode": get_b("%ASurfJuliaToggle"),
+			"SphereFoldEnabled": get_b("%SphereFoldToggle"),
+			"FoldSlot1Enabled": get_b("%FoldSlot1Toggle"),
+			"FoldSlot2Enabled": get_b("%FoldSlot2Toggle"),
+			"FoldSlot3Enabled": get_b("%FoldSlot3Toggle"),
+			"FoldSlot4Enabled": get_b("%FoldSlot4Toggle"),
+			"FoldSlot5Enabled": get_b("%FoldSlot5Toggle"),
+			"RenderingMethod": %RenderingMethodSelector.selected if has_node("%RenderingMethodSelector") else 0,
+			"F_absX": get_b("%AbsXToggle"),
+			"F_absY": get_b("%AbsYToggle"),
+			"F_absZ": get_b("%AbsZToggle"),
+			"F_X": get_b("%XSwapToggle"),
+			"F_Y": get_b("%YSwapToggle"),
+			"F_Z": get_b("%ZSwapToggle"),
+			"JuliaMorph": get_v("%MS4DMorphSlider"), # Note: Treat as state or float depending on how you tween it
+
+			# Amazing Surf Folding Logic
+			"EnableZAxisFold": get_b("%EnableZAxisToggle"),
+			"EnableWAxisFold": get_b("%EnableWAxisToggle"),
+			"ForceCylinderFold": get_b("%CylinderFoldToggle"),
+
+
+			# Fold Types (The Dropdowns)
+			"FoldType1": %FoldType1Selector.selected if has_node("%FoldType1Selector") else 0,
+			"FoldType2": %FoldType2Selector.selected if has_node("%FoldType2Selector") else 0,
+			"FoldType3": %FoldType3Selector.selected if has_node("%FoldType3Selector") else 0,
+
+			# DE & Bristor Logic
+			"DEMethod": %DEMethodSelector.selected if has_node("%DEMethodSelector") else 0,
+			"draw_parallel": get_b("%ParallelToggle"),
+			
+			
+			
+		}
 	}
+	
+	# NEW: Debug Comparison Logic
+	if waypoints.size() > 0:
+		var last = waypoints[-1]
+		print("\n--- WAYPOINT #", waypoints.size() + 1, " DIFF REPORT ---")
+		
+		# Check Position
+		if last.pos.distance_to(point.pos) > 0.01:
+			print("  [MOVE] Dist: ", last.pos.distance_to(point.pos))
+		
+		# Check Rotation (The Culprit!)
+		var angle_diff = last.rot.get_rotation_quaternion().angle_to(point.rot.get_rotation_quaternion())
+		if angle_diff > 0.01:
+			print("  [ROT] Angle Change: ", rad_to_deg(angle_diff), " degrees")
+		else:
+			print("  [!] WARNING: No rotation detected between points.")
+
+		# Check Floats
+		for f in point.floats:
+			if last.floats.has(f) and last.floats[f] != point.floats[f]:
+				print("  [PARAM] ", f, ": ", last.floats[f], " -> ", point.floats[f])
+	
 	waypoints.append(point)
-	print("Waypoint #", waypoints.size(), " recorded with rotation.")
+	print("SUCCESS: Waypoint #", waypoints.size(), " recorded.\n")
 	
+	# === TEMPORARY FULL DEBUG DUMP ===
+	print("=== FULL WAYPOINT #", waypoints.size(), " DUMP ===")
+	print("  POS: ", point.pos)
+	print("  ROT: ", point.rot)
+	print("  W: ", point.w)
+	print("  --- FLOATS ---")
+	for key in point.floats:
+		print("    ", key, " = ", point.floats[key])
+	print("  --- STATES ---")
+	for key in point.states:
+		print("    ", key, " = ", point.states[key])
+	print("=== END DUMP ===\n")
+func load_waypoint(index: int):
+	if index < 0 or index >= waypoints.size(): return
+	var p = waypoints[index]
+	var mat = get_fractal_material()
+	if not mat: return
+
+	# Create a tween for smooth transitions
+	var tween = create_tween().set_parallel(true).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+
+	# 1. Animate Camera Position and Rotation
+	tween.tween_property(main_camera, "global_position", p.pos, 2.0)
+	# For Basis (Rotation), we use a helper or interpolate_with
+	main_camera.global_transform.basis = main_camera.global_transform.basis.slerp(p.rot, 1.0) # Simplified for this snippet
+
+	# 2. Animate Floats and Vectors (The "Melt" effect)
+	for key in p.floats:
+		var start_val = mat.get_shader_parameter(key)
+		var end_val = p.floats[key]
+		
+		# We use a method tween to update shader uniforms every frame
+		tween.tween_method(
+			func(v): mat.set_shader_parameter(key, v),
+			start_val, 
+			end_val, 
+			2.0
+		)
+
+	# 3. Snap States (Toggles/Integers)
+	# These usually can't be tweened (you're either in Julia mode or you aren't)
+	for key in p.states:
+		mat.set_shader_parameter(key, p.states[key])
+		
+	# 4. Update the UI Sliders to match the new position
+	update_ui_to_match_shader()
+func sync_ui_to_shader():
+	var mat = get_fractal_material()
+	if not mat: return
 	
+	# This loops through all sliders in the scene
+	# If a slider's name (minus "Slider") matches a shader param, it updates it.
+	for node in get_tree().get_nodes_in_group("auto_sync_sliders"): 
+		# Tip: Add your sliders to a group named "auto_sync_sliders" in the editor
+		var p_name = node.name.replace("Slider", "")
+		var val = mat.get_shader_parameter(p_name)
+		
+		if val != null and val is float:
+			node.set_value_no_signal(val)
+			
+	# Update special cases manually
+	var seed = mat.get_shader_parameter("JuliaSeed")
+	if seed is Vector3:
+		if has_node("%ASurfJuliaXSlider"): %ASurfJuliaXSlider.value = seed.x
+		if has_node("%ASurfJuliaYSlider"): %ASurfJuliaYSlider.value = seed.y
+		if has_node("%ASurfJuliaZSlider"): %ASurfJuliaZSlider.value = seed.z
+	
+	# Update Julia Toggle
+	%ASurfJuliaToggle.button_pressed = mat.get_shader_parameter("JuliaMode")
+
+
 func play_flythrough():
+	print("--- DEBUG: Flythrough Starting ---")
 	if waypoints.size() < 2:
-		print("Need at least 2 waypoints!")
+		print("ERROR: Not enough waypoints. Count: ", waypoints.size())
 		return
 	
-	# Clean up any old animation before starting a new one
+	var mat = get_fractal_material()
+	if not mat:
+		print("ERROR: Fractal Material not found!")
+		return
+
 	if animation_tween:
 		animation_tween.kill()
 	
-	animation_tween = create_tween().set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	is_playing_flythrough = true
 	
-	# THE SYNC FIX: If we are recording, pause the tween immediately
-	if is_recording:
-		animation_tween.pause()
+	# Snap to first waypoint immediately
+	# Only snap camera to first waypoint, leave shader params as-is
+	var first = waypoints[0]
 	
-	for i in range(waypoints.size()):
-		var p = waypoints[i]
-		var duration = 10.0 # Your chosen speed
+	# Smoothly reset all shader params to waypoint 1 values first
+	var reset_tween = create_tween().set_parallel(true).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	var mat_check = mat  # already have mat from above
+	for param in first.floats:
+		if mat_check.get_shader_parameter(param) == null:
+			continue
+		var current_val = mat_check.get_shader_parameter(param)
+		var target_val = first.floats[param]
+		if str(current_val) == str(target_val):
+			continue
+		if typeof(current_val) != typeof(target_val):
+			mat_check.set_shader_parameter(param, target_val)
+			continue
+		if current_val is Vector4:
+			var cv = current_val
+			var tv = target_val
+			reset_tween.tween_method(
+				func(t, c = cv, tg = tv, p = param):
+					mat_check.set_shader_parameter(p, Vector4(
+						lerp(c.x, tg.x, t), lerp(c.y, tg.y, t),
+						lerp(c.z, tg.z, t), lerp(c.w, tg.w, t)
+					)),
+				0.0, 1.0, 1.5
+			)
+		elif current_val is Vector3:
+			var cv = current_val
+			var tv = target_val
+			reset_tween.tween_method(
+				func(t, c = cv, tg = tv, p = param):
+					mat_check.set_shader_parameter(p, Vector3(
+						lerp(c.x, tg.x, t),
+						lerp(c.y, tg.y, t),
+						lerp(c.z, tg.z, t)
+					)),
+				0.0, 1.0, 1.5
+			)
+		else:
+			var cv = current_val
+			var tv = target_val
+			reset_tween.tween_method(
+				func(v, p = param): mat_check.set_shader_parameter(p, v),
+				cv, tv, 1.5
+			)
+	# Snap camera to first waypoint
+	main_camera.global_position = first.pos
+	main_camera.global_transform.basis = first.rot
+	
+	# Wait for the reset to finish before starting segments
+	await get_tree().create_timer(1.6).timeout
+	
+	# Now build sequential tween segment by segment
+	_play_segment(0, mat)
+
+func _play_segment(index: int, mat: ShaderMaterial):
+	if index >= waypoints.size() - 1:
 		
-		# Animate Camera Position and Rotation
-		animation_tween.tween_property(main_camera, "global_position", p.pos, duration)
-		animation_tween.parallel().tween_property(main_camera, "global_basis", p.rot, duration)
-		
-		# Sync the W-Slider and Shader parameter
-		var start_w = %WSlider.value if i == 0 else waypoints[i-1].w
-		animation_tween.parallel().tween_method(func(v): 
-			%WSlider.value = v
-			_on_w_changed(v), start_w, p.w, duration)
+		var last = waypoints[waypoints.size() - 1]
+		for param in last.floats:
+			if mat.get_shader_parameter(param) != null:
+				mat.set_shader_parameter(param, last.floats[param])
+		for state in last.states:
+			mat.set_shader_parameter(state, last.states[state])
+		await get_tree().create_timer(0.1).timeout
+		is_playing_flythrough = false
+		print("--- Flythrough Complete ---")
+		return
+
 	
+	var prev = waypoints[index]
+	var next = waypoints[index + 1]
+	var duration = 5.0
+	
+	print(">> PLAYING SEGMENT ", index + 1, ":")
+	print("   Cam Move: ", prev.pos, " -> ", next.pos)
+
+	animation_tween = create_tween().set_parallel(true).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	
+	# Camera position
+	animation_tween.tween_property(main_camera, "global_position", next.pos, duration)
+	
+	# Camera rotation with captured values
+	var q_start = prev.rot.get_rotation_quaternion()
+	var q_end = next.rot.get_rotation_quaternion()
+	animation_tween.tween_method(
+		func(t, qs = q_start, qe = q_end):
+			main_camera.global_transform.basis = Basis(qs.slerp(qe, t)),
+		0.0, 1.0, duration
+	)
+	
+	# Shader params - tween FROM prev values TO next values
+	var mat_skip = []
+	for param in next.floats:
+		if mat.get_shader_parameter(param) == null:
+			mat_skip.append(param)
+	
+	# Shader params - tween FROM prev values TO next values
+	for param in next.floats:
+		var start_val = prev.floats.get(param, null)
+		var end_val = next.floats[param]
+		
+		if start_val == null:
+			continue
+		if param in mat_skip:
+			continue
+		if typeof(start_val) != typeof(end_val):
+			mat.set_shader_parameter(param, end_val)
+			continue
+		if str(start_val) == str(end_val):
+			continue
+		
+		print("   [TWEENING] ", param, ": ", start_val, " -> ", end_val)
+		var p_captured = param
+		
+		# Vector4 needs manual component interpolation
+		if start_val is Vector3:
+			var sv = start_val
+			var ev = end_val
+			animation_tween.tween_method(
+				func(t, s = sv, e = ev, pname = p_captured):
+					mat.set_shader_parameter(pname, Vector3(
+						lerp(s.x, e.x, t),
+						lerp(s.y, e.y, t),
+						lerp(s.z, e.z, t)
+					)),
+				0.0, 1.0, duration
+			)
+		# Vector4 needs manual component interpolation
+		elif start_val is Vector4:
+			var sv = start_val
+			var ev = end_val
+			animation_tween.tween_method(
+				func(t, s = sv, e = ev, pname = p_captured):
+					mat.set_shader_parameter(pname, Vector4(
+						lerp(s.x, e.x, t),
+						lerp(s.y, e.y, t),
+						lerp(s.z, e.z, t),
+						lerp(s.w, e.w, t)
+					)),
+				0.0, 1.0, duration
+			)
+		else:
+			animation_tween.tween_method(
+				func(v, pname = p_captured): mat.set_shader_parameter(pname, v),
+				start_val, end_val, duration
+			)
+	
+	# Snap states
+	for state in next.states:
+		mat.set_shader_parameter(state, next.states[state])
+	
+	# When this segment finishes, play the next one
+	var seq_tween = create_tween()
+	seq_tween.tween_interval(duration)
+	seq_tween.tween_callback(func(ni = index + 1, m = mat): _play_segment(ni, m))
+
+			
 func _on_clear_path_pressed():
 	waypoints.clear()
 	print("Animation path cleared.")
@@ -1046,3 +2356,254 @@ func _on_record_button_toggled(is_pressed: bool):
 func _on_save_video_dialog_file_selected(path: String):
 	# This path is where the user wants the final MP4
 	_stitch_frames_to_video(path)
+
+
+# Helper to safely get slider values without crashing if one is missing
+func get_v(node_path: String, default: float = 0.0) -> float:
+	var node = get_node_or_null(node_path)
+	if node and "value" in node:
+		return node.value
+	return default
+
+# Helper to safely get toggle states
+func get_b(node_path: String, default: bool = false) -> bool:
+	var node = get_node_or_null(node_path)
+	if node and "button_pressed" in node:
+		return node.button_pressed
+	return default
+
+
+func save_preset(path: String):
+	var config = ConfigFile.new()
+	var mat = get_fractal_material()
+	if not mat: return
+
+	# 1. Save Metadata
+	config.set_value("Metadata", "fractal_type", current_fractal)
+	config.set_value("Metadata", "shader_path", mat.shader.resource_path)
+
+	# 2. Save Camera
+	config.set_value("Camera", "pos", main_camera.global_position)
+	config.set_value("Camera", "basis", main_camera.global_transform.basis)
+
+	# 3. Save ALL Shader Parameters
+	var properties = mat.get_property_list()
+	for prop in properties:
+		var p_name = prop["name"]
+		if p_name.begins_with("shader_parameter/"):
+			var value = mat.get_shader_parameter(p_name.replace("shader_parameter/", ""))
+			if value != null:
+				config.set_value("ShaderParams", p_name, value)
+	
+	# 4. Save Special UI States (MOVED OUTSIDE THE LOOP)
+	config.set_value("UIState", "PaletteType", %PaletteSelector.selected if has_node("%PaletteSelector") else 0)
+	config.set_value("UIState", "TimeSpeed", %TimeSpeedSlider.value)
+	config.set_value("UIState", "IsParallel", %ParallelToggle.button_pressed)
+	
+	
+		# FORCE SAVE the actual picker colors (this bypasses the loop error)
+	if has_node("%ColorPicker1"):
+		config.set_value("ShaderParams", "shader_parameter/Color1", %ColorPicker1.color)
+	if has_node("%ColorPicker2"):
+		config.set_value("ShaderParams", "shader_parameter/Color2", %ColorPicker2.color)
+	if has_node("%ColorPicker3"):
+		config.set_value("ShaderParams", "shader_parameter/Color3", %ColorPicker3.color)
+	
+	
+	
+	config.set_value("UIState", "Contrast", %ContrastSlider.value if has_node("%ContrastSlider") else 1.0)
+
+	# Gradient check
+	var grad_tex = mat.get_shader_parameter("GradientTexture") 
+	if grad_tex and grad_tex is GradientTexture1D:
+		config.set_value("UIState", "CustomGradientData", grad_tex.gradient)
+
+	# 5. ACTUALLY SAVE (MOVED OUTSIDE THE LOOP)
+	var save_err = config.save(path)
+	if save_err == OK:
+		print("SUCCESS: Preset saved to: ", path)
+	else:
+		print("ERROR: Could not save file. Code: ", save_err)
+
+func load_preset(path: String):
+	var config = ConfigFile.new()
+	var err = config.load(path)
+	if err != OK: return
+
+	var mat = get_fractal_material()
+	
+	# 1. Restore Fractal Type/Shader
+	var new_path = config.get_value("Metadata", "shader_path", "")
+	if new_path != "" and mat.shader.resource_path != new_path:
+		mat.shader = load(new_path)
+		current_fractal = config.get_value("Metadata", "fractal_type", "Mandelbox")
+	
+	# 2. Restore Camera
+	main_camera.global_position = config.get_value("Camera", "pos")
+	main_camera.global_transform.basis = config.get_value("Camera", "basis")
+	if main_camera.has_method("reset_internal_rotation"):
+		main_camera.call("reset_internal_rotation")
+
+	# 3. Restore Shader Parameters
+	if config.has_section("ShaderParams"):
+		for key in config.get_section_keys("ShaderParams"):
+			var val = config.get_value("ShaderParams", key)
+			
+			# Strip the prefix so "shader_parameter/Power" becomes "Power"
+			var clean_name = key.replace("shader_parameter/", "")
+			
+			# Apply it to the material
+			mat.set_shader_parameter(clean_name, val)
+		
+	if config.has_section_key("UIState", "CustomGradientData"):
+		var grad_res = config.get_value("UIState", "CustomGradientData")
+		if grad_res is Gradient:
+			# Update the shader texture
+			var new_tex = GradientTexture1D.new()
+			new_tex.gradient = grad_res
+			mat.set_shader_parameter("GradientTexture", new_tex)
+			
+			# UPDATE THE UI COLOR PICKERS
+			# Usually: Stop 0 = Color1, Stop 0.5 = Color2, Stop 1.0 = Color3
+			if grad_res.get_point_count() >= 3:
+				if has_node("%ColorPicker1"): 
+					%ColorPicker1.color = grad_res.get_color(0)
+				if has_node("%ColorPicker2"): 
+					%ColorPicker2.color = grad_res.get_color(1)
+				if has_node("%ColorPicker3"): 
+					%ColorPicker3.color = grad_res.get_color(2)
+					
+				# Manually trigger the shader update for the colors
+				_on_color_updated() 
+	%TimeSpeedSlider.value = config.get_value("UIState", "TimeSpeed", 0.5)
+	%ParallelToggle.button_pressed = config.get_value("UIState", "IsParallel", true)
+	%ZoomSlider.value = config.get_value("UIState", "Zoom", 4.5)
+	
+	# Manually trigger the shader update after loading
+	_on_shader_param_changed(%TimeSpeedSlider.value, "time_speed")
+	_on_shader_param_changed(%ParallelToggle.button_pressed, "draw_parallel")
+	_on_shader_param_changed(%ZoomSlider.value, "zoom")
+	print("Preset loaded with custom colors!")
+	
+	# IMPORTANT: Refresh the UI sliders to match the new values
+	sync_ui_to_shader()
+	print("Preset loaded successfully!")
+	
+	
+func _on_color_updated():
+	var mat = get_fractal_material()
+	if not mat: return
+	
+	var c1 = %ColorPicker1.color
+	var c2 = %ColorPicker2.color
+	var c3 = %ColorPicker3.color
+	
+	# Send to shader as Vector3 (ignoring Alpha)
+	mat.set_shader_parameter("Color1", Vector3(c1.r, c1.g, c1.b))
+	mat.set_shader_parameter("Color2", Vector3(c2.r, c2.g, c2.b))
+	mat.set_shader_parameter("Color3", Vector3(c3.r, c3.g, c3.b))
+func _on_time_speed_slider_value_changed(value: float) -> void:
+	var mat = get_fractal_material()
+	if mat:
+		mat.set_shader_parameter("time_speed", value)
+
+func _on_zoom_slider_value_changed(value: float) -> void:
+	var mat = get_fractal_material()
+	if mat:
+		mat.set_shader_parameter("zoom", value)
+
+func _on_parallel_toggle_toggled(toggled_on: bool) -> void:
+	var mat = get_fractal_material()
+	if mat:
+		mat.set_shader_parameter("draw_parallel", toggled_on)
+		
+		
+func _on_shader_param_changed(value, param_name: String):
+	var mat = get_fractal_material()
+	if mat:
+		mat.set_shader_parameter(param_name, value)
+func change_fractal_type(new_type_name: String):
+	# Update the internal state
+	current_fractal = new_type_name
+	
+	# This part depends on how your UI is named. 
+	# If you have a Tree node named %FractalTree:
+	var tree = %FractalTree 
+	var root = tree.get_root()
+	
+	# Search for the item in the tree that matches the string (e.g., "Mandelbox")
+	var item = find_tree_item(root, new_type_name)
+	if item:
+		tree.set_selected(item)
+		# This manually triggers your _on_tree_item_selected logic
+		_on_tree_item_selected() 
+
+# Helper to find the right item in your sidebar list
+func find_tree_item(parent: TreeItem, text: String) -> TreeItem:
+	if parent.get_text(0) == text:
+		return parent
+	var child = parent.get_children()
+	while child:
+		var found = find_tree_item(child, text)
+		if found: return found
+		child = child.get_next()
+	return null
+	
+func update_ui_to_match_shader():
+	var mat = get_fractal_material()
+	if not mat: return
+
+	# 1. Update Floats (Sliders)
+	# This uses the key names from your 'floats' dictionary
+	# Note: We use %Name notation to match your unique scene tree IDs
+	set_s_val("%WSlider", mat.get_shader_parameter("W"))
+	set_s_val("%ScaleSlider", mat.get_shader_parameter("Scale"))
+	set_s_val("%PowerSlider", mat.get_shader_parameter("Power"))
+	set_s_val("%ReflectSlider", mat.get_shader_parameter("Reflectivity"))
+	set_s_val("%FogSlider", mat.get_shader_parameter("FogDensity"))
+	
+	# 2. Update Vector3/Vector4 Sliders (Individual Components)
+	var pre_off = mat.get_shader_parameter("PreOffset")
+	if pre_off is Vector3:
+		set_s_val("%PreOffsetXSlider", pre_off.x)
+		set_s_val("%PreOffsetYSlider", pre_off.y)
+		set_s_val("%PreOffsetZSlider", pre_off.z)
+
+	var fold_lim = mat.get_shader_parameter("FoldLimit4D")
+	if fold_lim is Vector4:
+		set_s_val("%FoldLimitXSlider", fold_lim.x)
+		set_s_val("%FoldLimitYSlider", fold_lim.y)
+		set_s_val("%FoldLimitZSlider", fold_lim.z)
+		set_s_val("%FoldLimitWSlider", fold_lim.w)
+
+	# 3. Update States (Checkboxes/Toggles)
+	set_b_val("%ASurfJuliaToggle", mat.get_shader_parameter("JuliaMode"))
+	set_b_val("%SphereFoldToggle", mat.get_shader_parameter("SphereFoldEnabled"))
+	set_b_val("%AbsXToggle", mat.get_shader_parameter("F_absX"))
+	set_b_val("%AbsYToggle", mat.get_shader_parameter("F_absY"))
+	set_b_val("%AbsZToggle", mat.get_shader_parameter("F_absZ"))
+
+# Helper to safely set slider values without triggering 'value_changed' loops
+func set_s_val(node_name: String, value):
+	if has_node(node_name) and value != null:
+		var node = get_node(node_name)
+		node.set_block_signals(true) # Prevents feedback loops
+		node.value = float(value)
+		node.set_block_signals(false)
+
+# Helper to safely set checkbox states
+func set_b_val(node_name: String, value):
+	if has_node(node_name) and value != null:
+		var node = get_node(node_name)
+		node.set_block_signals(true)
+		node.button_pressed = bool(value)
+		node.set_block_signals(false)
+func _process(delta: float):
+	# 1. Keep the fractal shader's internal time moving
+	time += delta
+	var mat = get_fractal_material()
+	if mat:
+		mat.set_shader_parameter("Time", time)
+
+	# 2. If we are playing a flythrough, ensure the UI stays in sync 
+	# (Optional, but keeps sliders moving while you fly)
