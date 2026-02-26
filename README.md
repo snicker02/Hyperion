@@ -83,3 +83,7 @@ Hyperion will prompt you to save the final video; ensure you have FFmpeg install
 You must have FFMPG installed to save animations https://www.ffmpeg.org/www.ffmpeg.org/ 
 
 For program to save as mp4 you must add FFMPEG to system path. You only have to do this step one time.  Instructions are here. https://docs.google.com/document/d/1bv4__JFZX7mvYdIsItGDAiIU2nbfe3P5ZYgVwHXHJXg/edit?usp=sharing
+
+
+
+Program created by Brad Stefanov with assistance from Gemini and Claude
