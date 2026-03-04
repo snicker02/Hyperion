@@ -96,9 +96,19 @@ group_uniforms Fractal_Modes;
 uniform bool JuliaMode = false;
 uniform vec3 JuliaSeed = vec3(0.0, 0.0, 0.0);
 
+uniform float WarpStrength; 
+uniform float WarpFrequency;
+uniform float RibbonTwist;
 
 
 group_uniforms KIFS_Symmetry;
+
+
+group_uniforms Torus_Settings;
+
+
+
+
 
 void vertex() {
 	POSITION = vec4(VERTEX.xy, 1.0, 1.0);
@@ -286,7 +296,36 @@ void applyFold(inout vec4 z, int foldType, inout vec4 oldZ, bool includeZ, bool 
         dr *= m; 
     }
     break;
-}
+	case 14: // Box Inversion (Mandelbox Logic)
+    float boxLimit = FoldLimit4D.x; // Using X as the primary radius
+    z.xyz = clamp(z.xyz, -FoldLimit4D.xyz, FoldLimit4D.xyz) * 2.0 - z.xyz;
+    float r2_box = dot(z.xyz, z.xyz);
+    float R2_box = boxLimit * boxLimit;
+    if (r2_box < R2_box) {
+        float m = (R2_box / max(1e-5, r2_box)) * FoldingValue;
+        z.xyz *= m;
+        dr *= m; // In applyFoldNoDerivative, this hits temp_dr and is safely discarded
+    }
+    break;
+
+case 15: // Organic Ribbon/Tentacle Fold
+    // Tentacle Path Warp
+    z.xy += vec2(sin(z.z * WarpFrequency), cos(z.z * WarpFrequency)) * WarpStrength;
+
+    // Polar "Tube" Transformation
+    float angle = atan(z.y, z.x);
+    float radius = length(z.xy);
+    
+    // Ribbon Thickness Logic
+    radius = abs(radius - 1.0) * 1.5; 
+    
+    // Spiral Twist
+    float spiral = angle + (z.z * RibbonTwist);
+    z.xy = vec2(cos(spiral), sin(spiral)) * radius;
+    
+    z *= 1.1; // Escape scaling
+    break;
+	}
 }
 
 
@@ -432,99 +471,107 @@ vec3 rotate3D(vec3 p, vec3 angles) {
 
 
 
+
+
 float map(vec3 p3d, out vec4 orbit) {
-    // OffsetW is used to move the 4D 'slice'
     vec4 z = vec4(p3d, OffsetW);
+    // Cast JuliaSeed to vec4 to prevent dimension mismatch errors
     vec4 c = JuliaMode ? vec4(JuliaSeed, 0.0) : z;
     orbit = vec4(1e20);
-    
     float dr = 1.0;
     
+    // Track the closest point of the recursive shape
+    float d_recursive_shape = 1e10; 
+
     for (int i = 0; i < Iterations; i++) {
         vec4 oldZ = z;
         float r2 = dot(z, z);
         if (r2 > Bailout * Bailout * 100.0) break;
-        
-        // 1. Calculate dynamic scale based on complexity (dr)
-        float current_scale = Scale + ScaleVary * (dr - 1.0);
 
-        // 2. Pre-Folding Transforms
+        // --- 1. THE GLOBAL SHAPE SELECTOR (U-Bend Z-Axis) ---
+        if (ShapeEnabled) {
+            vec3 p = z.xyz - ShapeOffset; 
+            float d_base;
+
+            if (ShapeType == 0) {
+                // Recursive Torus logic
+                d_base = sdTorus(p, vec2(ShapeThickness, ShapeRadius));
+            } 
+            else if (ShapeType == 1) {
+                // Recursive Cylinder/Pole (Z-Axis Oriented with U-Bend)
+                
+                // NEW: Apply U-Bend specifically along the Z-axis depth
+                // Bending p.y based on p.z squared creates the 'U' curve
+                if (abs(ShapeBend) > 0.001) {
+                    p.y += ShapeBend * 0.1 * p.z * p.z;
+                }
+
+                // Call the Z-oriented function from your globals
+                d_base = sdCylinderZ(p, ShapeRadius * 5.0, ShapeThickness);
+
+
+                // Tentacles grow radially from the bent Z-spine
+                float angle = atan(p.y, p.x);
+                float tentacle_wave = sin(angle * TentacleCount + (p.z * TentacleTwist));
+                float growth = max(0.0, tentacle_wave) * TentacleLength;
+                d_base -= growth;
+            }
+
+            // Apply "Lakel" Surface Grit
+            if (SurfStrength > 0.01) {
+                float grain = sin((z.x + z.y + z.z) * SurfScale * 5.0);
+                d_base += grain * 0.1 * GrainIntensity * SurfStrength;
+            }
+
+            // Normalize shape distance by current derivative (dr)
+            d_recursive_shape = min(d_recursive_shape, d_base / dr);
+        }
+
+        // --- 2. FRACTAL FOLDS & SCALING (Restored all 5 Slots) ---
+        float current_scale = Scale + ScaleVary * (dr - 1.0);
         z.xyz += PreOffset;
         
-        // Apply Fold Slots
+        // Ensure all slots are checked to match your Amazing Surf settings
         if (FoldSlot1Enabled) applyFold(z, FoldType1, oldZ, EnableZAxisFold, EnableWAxisFold, dr);
-if (FoldSlot2Enabled) applyFold(z, FoldType2, oldZ, EnableZAxisFold, EnableWAxisFold, dr);
-if (FoldSlot3Enabled) applyFold(z, FoldType3, oldZ, EnableZAxisFold, EnableWAxisFold, dr);
-if (FoldSlot4Enabled) applyFold(z, FoldType4, oldZ, EnableZAxisFold, EnableWAxisFold, dr);
-if (FoldSlot5Enabled) applyFold(z, FoldType5, oldZ, EnableZAxisFold, EnableWAxisFold, dr);
-        z.xyz += PostOffset;
-		
-		if (SurfStrength > 0.001) {
-        // Use a 3D position for noise, animated by time
-        vec3 animated_p = z.xyz + vec3(TIME * SurfSpeed * 0.1);
-        float surfNoise = fbm(animated_p * SurfScale, SurfOctaves, SurfRoughness);
-        // Displace the fractal position
-        z.xyz += normalize(z.xyz) * surfNoise * SurfStrength * 0.1;
-    }
+        if (FoldSlot2Enabled) applyFold(z, FoldType2, oldZ, EnableZAxisFold, EnableWAxisFold, dr);
+        if (FoldSlot3Enabled) applyFold(z, FoldType3, oldZ, EnableZAxisFold, EnableWAxisFold, dr);
+        if (FoldSlot4Enabled) applyFold(z, FoldType4, oldZ, EnableZAxisFold, EnableWAxisFold, dr);
+        if (FoldSlot5Enabled) applyFold(z, FoldType5, oldZ, EnableZAxisFold, EnableWAxisFold, dr);
         
-        // 3. Sphere Fold Logic merged with ScaleVary
+        z.xyz += PostOffset;
+        
+        // Sphere Fold Logic
         if (SphereFoldEnabled) {
             float rr = dot(z.xyz, z.xyz);
-            if (ForceCylinderFold) rr -= z.z * z.z * CylinderWeight;
-            
             float m = current_scale;
-            if (rr < MinRadius * MinRadius) {
-                m /= (MinRadius * MinRadius);
-            } else if (rr < FixedRadius * FixedRadius) {
-                m /= rr;
-            }
-            
+            if (rr < MinRadius * MinRadius) m /= (MinRadius * MinRadius);
+            else if (rr < FixedRadius * FixedRadius) m /= rr;
             z *= m;
             dr = dr * abs(m) + 1.0;
         } else {
             z *= current_scale;
             dr = dr * abs(current_scale) + 1.0;
         }
-        
-        // 4. Rotations
-        if (length(EulerRotation) > 0.001) {
-            z.xyz = rotate3D(z.xyz, EulerRotation);
-        }
-        
-        if (abs(RotationAngle) > 0.001) z = rotateZ(z, RotationAngle * Power);
-        if (abs(RotationXW) > 0.001)    z = rotateXW(z, RotationXW * Power);
-        if (abs(RotationYW) > 0.001)    z = rotateYW(z, RotationYW * Power);
-        if (abs(RotationZW) > 0.001)    z = rotateZW(z, RotationZW * Power);
-        
-        // 5. Julia & Orbit
+
+        // Rotate and apply Julia offset
+        if (length(EulerRotation) > 0.001) z.xyz = rotate3D(z.xyz, EulerRotation);
         if (JuliaMode) z += c;
         orbit = min(orbit, abs(z));
     }
-    
-    // --- RESTORED DISTANCE ESTIMATION METHODS ---
+
     float r = length(z);
-    float result_de = 0.0;
+    float d_fractal = (DEMethod == 0) ? 0.5 * r * log(r) / dr : max(abs(z.x), max(abs(z.y), abs(z.z))) / dr;
     
-    if (DEMethod == 0) {
-        // Standard Smooth DE
-        result_de = 0.5 * r * log(r) / dr;
-    } 
-    else if (DEMethod == 1) {
-        // Box / Cubic DE (Sharp edges)
-        result_de = max(abs(z.x), max(abs(z.y), abs(z.z))) / dr;
-    } 
-    else {
-        // Hybrid DE (Mix of both)
-        float standard = 0.5 * r * log(r) / dr;
-        float box = max(abs(z.x), max(abs(z.y), abs(z.z))) / dr;
-        result_de = mix(standard, box, 0.5);
+    // --- 3. THE SMOOTH BLEND ---
+    float final_de = d_fractal;
+    if (ShapeEnabled && d_recursive_shape < 1e9) {
+        float k = 0.1; // Smoothness factor
+        float h = clamp(0.5 + 0.5 * (d_fractal - d_recursive_shape) / k, 0.0, 1.0);
+        final_de = mix(d_fractal, d_recursive_shape, h) - k * h * (1.0 - h);
     }
-    
-    return clamp(result_de * DEMultiplier, 0.0, 10.0);
+
+    return clamp(final_de * DEMultiplier, 0.0, 10.0);
 }
-
-
-
 
 
 
@@ -638,4 +685,10 @@ void fragment() {
     // Apply final output
     ALBEDO = apply_art_controls(final_color);
     ALPHA = final_alpha;
+}
+vec3 organic_warp(vec3 p) {
+    // This creates the "tentacle" curve by offsetting 
+    // X and Y based on the sine of Z
+    p.xy += vec2(sin(p.z * WarpFrequency), cos(p.z * WarpFrequency)) * WarpStrength;
+    return p;
 }

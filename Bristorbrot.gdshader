@@ -12,7 +12,7 @@ uniform bool draw_parallel = true;
 uniform float zoom : hint_range(0.1, 10.0) = 4.5;
 uniform float WarpStrength : hint_range(0.0, 2.0) = 0.0;
 uniform float WarpFrequency : hint_range(0.1, 10.0) = 1.0;
-uniform float WOffset : hint_range(-3.0, 3.0) = 0.5;
+uniform float WOffset : hint_range(-3.0, 3.0) = 0.0;
 // --- Constants ---
 const float Epsilon = 0.002;
 const float RenderDistance = 100.0;
@@ -45,42 +45,46 @@ vec3 domain_warp(vec3 p, float t) {
 
 // --- BristorBrot 4D Distance Function ---
 float distanceEstimation(vec3 pos3d, float t) {
-    vec4 pos;
-    if (draw_parallel) {
-        float cs = cos(t);
-        float sn = sin(t);
-        pos = vec4(pos3d.x, sn * pos3d.y, cs * pos3d.y, pos3d.z);
-    } else {
-        pos = vec4(pos3d, WOffset);
-    }
-
-pos.xyz = domain_warp(pos.xyz, t);
+    vec4 pos = draw_parallel ? vec4(pos3d.x, sin(t) * pos3d.y, cos(t) * pos3d.y, pos3d.z) : vec4(pos3d, WOffset);
     vec4 z = pos;
     float dr = 1.0;
-    float r = length(z);
+    float d_recursive_shape = 1e10;
+
     for (int i = 0; i < 25; i++) {
-        r = length(z);
-if (r > 4.0) break; // Increased slightly from 3.0
+        float r = length(z);
+        if (r > 4.0) break; 
 
-vec4 z1;
-// Added safety: prevents division by zero or infinite scaling
-float newx = z.x * z.x - z.y * z.y - z.z * z.z - z.w * z.w; // Extended to 4D
-float newy = z.y * (2.0 * z.x - z.z); // The -z.z is the 'j.i = -j' interaction
-float newz = z.z * (2.0 * z.x + z.y); // The +z.y is the 'i.j = j' interaction
-float neww = z.w * (2.0 * z.x);      // Keep w simple or mix it similarly
+        if (ShapeEnabled) {
+            vec3 p = z.xyz - ShapeOffset;
+            float d_base;
+            if (ShapeType == 0) {
+                d_base = sdTorus(p, vec2(ShapeRadius, ShapeThickness));
+            } else if (ShapeType == 1) {
+                if (abs(ShapeBend) > 0.001) p.y += ShapeBend * 0.1 * p.z * p.z;
+                d_base = sdCylinderZ(p, 10.0, ShapeRadius);
+                float angle = atan(p.y, p.x);
+                float tentacle_wave = sin(angle * TentacleCount + (p.z * TentacleTwist));
+                d_base -= max(0.0, tentacle_wave) * TentacleLength;
+            }
+            d_recursive_shape = min(d_recursive_shape, d_base / dr);
+        }
 
-z.x = newx + pos.x;
-z.y = newy + pos.y;
-z.z = newz + pos.z;
-z.w = neww + pos.w;
-
-// The Bulber DE update: DE = DE * 2.0 * r
-dr = dr * 2.0 * r + 1.0;
+        vec4 z_next = vec4(z.x*z.x - z.y*z.y - z.z*z.z - z.w*z.w, 
+                           z.y*(2.0*z.x - z.z - z.w), 
+                           z.z*(2.0*z.x + z.y - z.w), 
+                           z.w*(2.0*z.x + z.y + z.z));
+        dr = dr * 2.0 * r + 1.0;
+        z = z_next + pos;
     } 
     
-   
-    return max(0.5 * log(r) * r / dr, Epsilon * 0.1);
-} 
+    float d_fractal = 0.5 * log(length(z)) * length(z) / dr;
+    if (ShapeEnabled && d_recursive_shape < 1e9) {
+        float k = 0.1;
+        float h = clamp(0.5 + 0.5 * (d_fractal - d_recursive_shape) / k, 0.0, 1.0);
+        return mix(d_fractal, d_recursive_shape, h) - k * h * (1.0 - h);
+    }
+    return d_fractal;
+}
 
 // --- Normal Calculation (Fixed Syntax) ---
 vec3 get_normal(vec3 p, float t) {

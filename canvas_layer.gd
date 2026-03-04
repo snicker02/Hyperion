@@ -9,11 +9,12 @@ var mandelbox_shader = preload("res://Mandelbox4D.gdshader")
 var menger_shader = preload("res://menger.gdshader")
 var amazingsurf_shader = preload("res://amazingsurf.gdshader")
 var bristorbrot_shader = preload("res://Bristorbrot.gdshader") # Ensure this path is correct
+var archon_shader = preload("res://archon.gdshader")
 var animation_tween: Tween # This allows us to pause and step the animation
 @onready var save_video_dialog = %SaveVideoDialog # Create a FileDialog in your scene
 # Track which fractal is currently active
 var current_fractal: String = "Mandelbox" # Default to Mandelbox
-
+var archon_initialized: bool = false
 # Core Menger 4D Sliders
 @onready var menger_scale_slider = %MengerScaleSlider
 @onready var menger_offset_w_slider = %OffsetWSlider
@@ -38,7 +39,7 @@ var is_recording: bool = false
 var frame_counter: int = 0
 var recording_dir: String = "user://recordings"
 @onready var record_timer = %RecordTimer # Make sure you added this Timer node
-
+@onready var menger_detail_slider = %MengerDetailSlider
 @onready var background_texture = %BackgroundTexture
 @onready var bg_file_dialog = %BackgroundDialog 
 var is_playing_flythrough: bool = false
@@ -292,7 +293,15 @@ func _ready():
 		menger_jz_slider.value_changed.connect(_update_menger)
 	if menger_jw_slider:
 		menger_jw_slider.value_changed.connect(_update_menger)
-		
+	if has_node("%MengerDetailSlider"):
+		%MengerDetailSlider.value_changed.connect(_on_menger_detail_changed)
+		# Sync initial value from shader
+		mat = get_fractal_material()
+		if mat:
+			var detail_val = mat.get_shader_parameter("Detail")
+			if detail_val != null:
+				%MengerDetailSlider.value = detail_val
+				_on_menger_detail_changed(detail_val)
 		
 		
 	if has_node("%SaturationSlider"):
@@ -537,7 +546,7 @@ func _ready():
 		%ASDetailSlider.value_changed.connect(_on_as_detail_changed)
 
 	%TimeSpeedSlider.value_changed.connect(_on_shader_param_changed.bind("time_speed"))
-	#%ZoomSlider.value_changed.connect(_on_shader_param_changed.bind("zoom"))
+	
 	%ParallelToggle.toggled.connect(_on_shader_param_changed.bind("draw_parallel"))
 
 	if has_node("%WarpStrengthSlider"):
@@ -556,8 +565,639 @@ func _ready():
 		_on_kifs_sides_changed(%KIFS_Sides_Slider.value) # Initial label sync
 
 	if has_node("%KIFS_Twist_Slider"):
-		%KIFS_Twist_Slider.value_changed.connect(_on_kifs_twist_changed)
-		_on_kifs_twist_changed(%KIFS_Twist_Slider.value) # Initial label sync
+		%KIFS_Twist_Slider.value = 0.0
+
+	mat = get_fractal_material()
+	if mat:
+		mat.set_shader_parameter("KIFS_Twist", 0.0)
+		
+	# Organic Ribbon/Tentacle Connections for Amazing Surf
+	if has_node("%RibbonWarpStrengthSlider"):
+		%RibbonWarpStrengthSlider.value_changed.connect(_on_ribbon_warp_strength_changed)
+
+	if has_node("%RibbonWarpFrequencySlider"):
+		%RibbonWarpFrequencySlider.value_changed.connect(_on_ribbon_warp_frequency_changed)
+
+	if has_node("%RibbonTwistSlider"):
+		%RibbonTwistSlider.value_changed.connect(_on_ribbon_twist_changed)
+		
+	
+	
+		# --- Master Toggle with Fixed Indentation ---
+	%ShapeEnabledCheck.toggled.connect(func(is_pressed):
+		get_fractal_material().set_shader_parameter("ShapeEnabled", is_pressed)
+		
+		# Grouping all shape-related UI nodes
+		var shape_nodes = [
+			%ShapeTypeButton, %ShapeRadiusSlider, %ShapeThicknessSlider, 
+			%ShapeBendSlider, %GrainIntensitySlider, %TentacleCountSlider, 
+			%TentacleLengthSlider, %TentacleTwistSlider
+		]
+		
+		for node in shape_nodes:
+			if is_instance_valid(node):
+				if node is HSlider:
+					# Sliders use 'editable'
+					node.editable = is_pressed
+				elif node is OptionButton:
+					# Buttons use 'disabled' (inverted)
+					node.disabled = !is_pressed
+		)
+
+	# --- Shape Type Selector ---
+	%ShapeTypeButton.item_selected.connect(func(index):
+		get_fractal_material().set_shader_parameter("ShapeType", index)
+	)
+		
+		
+		
+	%ShapeBendSlider.value_changed.connect(func(v):
+		%ShapeBendLabel.text = "Spine Bend : " + str(snapped(v, 0.01))
+		get_fractal_material().set_shader_parameter("ShapeBend", v)
+	)
+	
+	
+	
+		
+	
+		# Connect Geometry Sliders with one-line lambdas
+	%ShapeRadiusSlider.value_changed.connect(func(v):
+		%ShapeRadiusLabel.text = "Radius : " + str(snapped(v, 0.01))
+		get_fractal_material().set_shader_parameter("ShapeRadius", v)
+	)
+
+	%ShapeThicknessSlider.value_changed.connect(func(v):
+		%ShapeThicknessLabel.text = "Tube width: " + str(snapped(v, 0.01))
+		get_fractal_material().set_shader_parameter("ShapeThickness", v)
+	)	
+
+	# Connect Offset Sliders
+	%ShapeOffsetXSlider.value_changed.connect(_on_shape_offset_changed)
+	%ShapeOffsetYSlider.value_changed.connect(_on_shape_offset_changed)
+	%ShapeOffsetZSlider.value_changed.connect(_on_shape_offset_changed)
+	# Connect the Master Shape Toggle
+	
+	# --- Global Shape Detail: Grain Intensity ---
+	%GrainIntensitySlider.value_changed.connect(func(v):
+		%GrainIntensityLabel.text = "Grain Intensity : " + str(snapped(v, 0.01))
+		get_fractal_material().set_shader_parameter("GrainIntensity", v)
+	)
+
+	# --- Tentacle Spines Settings ---
+	%TentacleCountSlider.value_changed.connect(func(v):
+		%TentacleCountLabel.text = "Tentacle Count : " + str(int(v))
+		get_fractal_material().set_shader_parameter("TentacleCount", v)
+	)
+
+	%TentacleLengthSlider.value_changed.connect(func(v):
+		%TentacleLengthLabel.text = "Tentacle Length : " + str(snapped(v, 0.01))
+		get_fractal_material().set_shader_parameter("TentacleLength", v)
+	)
+
+	%TentacleTwistSlider.value_changed.connect(func(v):
+		%TentacleTwistLabel.text = "Tentacle Twist : " + str(snapped(v, 0.01))
+		get_fractal_material().set_shader_parameter("TentacleTwist", v)
+	)
+		
+		
+		
+	for slider_path in ["%KIFSAngleXSlider", "%KIFSAngleYSlider", "%KIFSAngleZSlider"]:
+		if has_node(slider_path):
+			get_node(slider_path).value = 0.0
+
+		for rot_path in ["%RotationXWSlider", "%RotationYWSlider", "%RotationZWSlider"]:
+			if has_node(rot_path):
+				get_node(rot_path).value = 0.0
+
+	# Push zeroes directly to the shader too
+	mat = get_fractal_material()
+	if mat:
+		mat.set_shader_parameter("KIFS_Angle_X", 0.0)
+		mat.set_shader_parameter("KIFS_Angle_Y", 0.0)
+		mat.set_shader_parameter("KIFS_Angle_Z", 0.0)
+		mat.set_shader_parameter("RotationXW", 0.0)
+		mat.set_shader_parameter("RotationYW", 0.0)
+		mat.set_shader_parameter("RotationZW", 0.0)
+	
+	if has_node("%GrainIntensitySlider"):
+		%GrainIntensitySlider.value = 0.0
+
+	mat = get_fractal_material()
+	if mat:
+		mat.set_shader_parameter("GrainIntensity", 0.0)
+	for zero_path in ["%GrainIntensitySlider", "%TentacleCountSlider", 
+		"%TentacleLengthSlider", "%TentacleTwistSlider", "%ShapeBendSlider"]:
+		if has_node(zero_path):
+			get_node(zero_path).value = 0.0
+			
+			
+			
+		# === ARCHON CONNECTIONS ===
+	if has_node("%ArchonScaleSlider"):
+		%ArchonScaleSlider.value_changed.connect(_on_archon_scale_changed)
+	if has_node("%ArchonIterationsSlider"):
+		%ArchonIterationsSlider.value_changed.connect(_on_archon_iterations_changed)
+	if has_node("%ArchonBailoutSlider"):
+		%ArchonBailoutSlider.value_changed.connect(_on_archon_bailout_changed)
+	if has_node("%ArchonTowerBiasSlider"):
+		%ArchonTowerBiasSlider.value_changed.connect(_on_archon_tower_bias_changed)
+
+	# Archon Constant XYZW
+	if has_node("%ArchonConstantXSlider"):
+		%ArchonConstantXSlider.value_changed.connect(_on_archon_constant_changed)
+	if has_node("%ArchonConstantYSlider"):
+		%ArchonConstantYSlider.value_changed.connect(_on_archon_constant_changed)
+	if has_node("%ArchonConstantZSlider"):
+		%ArchonConstantZSlider.value_changed.connect(_on_archon_constant_changed)
+	if has_node("%ArchonConstantWSlider"):
+		%ArchonConstantWSlider.value_changed.connect(_on_archon_constant_changed)
+		
+	# City Tiling
+	if has_node("%ArchonCityEnabledToggle"):
+		%ArchonCityEnabledToggle.toggled.connect(_on_archon_city_enabled_toggled)
+	if has_node("%ArchonCellSizeSlider"):
+		%ArchonCellSizeSlider.value_changed.connect(_on_archon_cell_size_changed)
+	if has_node("%ArchonCellRotVarianceSlider"):
+		%ArchonCellRotVarianceSlider.value_changed.connect(_on_archon_cell_rot_variance_changed)
+	if has_node("%ArchonCellConstantVarianceSlider"):
+		%ArchonCellConstantVarianceSlider.value_changed.connect(_on_archon_cell_constant_variance_changed)
+	if has_node("%ArchonCellHeightVarianceSlider"):
+		%ArchonCellHeightVarianceSlider.value_changed.connect(_on_archon_cell_height_variance_changed)
+	if has_node("%ArchonAlleyWidthSlider"):
+		%ArchonAlleyWidthSlider.value_changed.connect(_on_archon_alley_width_changed)
+
+	# Spin Fold
+	if has_node("%ArchonSpinStrengthSlider"):
+		%ArchonSpinStrengthSlider.value_changed.connect(_on_archon_spin_strength_changed)
+	if has_node("%ArchonSpinAxisSelector"):
+		%ArchonSpinAxisSelector.clear()
+		%ArchonSpinAxisSelector.add_item("Y - Columns")
+		%ArchonSpinAxisSelector.add_item("X - Arches")
+		%ArchonSpinAxisSelector.add_item("Z - Rings")
+		%ArchonSpinAxisSelector.selected = 0
+		_on_archon_spin_axis_selected(0)
+		%ArchonSpinAxisSelector.item_selected.connect(_on_archon_spin_axis_selected)
+
+
+	# Arch Warp
+	if has_node("%ArchonArchFreqSlider"):
+		%ArchonArchFreqSlider.value_changed.connect(_on_archon_arch_freq_changed)
+	if has_node("%ArchonArchDepthSlider"):
+		%ArchonArchDepthSlider.value_changed.connect(_on_archon_arch_depth_changed)
+	if has_node("%ArchonArchAxisSelector"):
+		%ArchonArchAxisSelector.clear()
+		%ArchonArchAxisSelector.add_item("XY - Doorways")
+		%ArchonArchAxisSelector.add_item("XZ - Windows")
+		%ArchonArchAxisSelector.add_item("YZ - Tunnels")
+		%ArchonArchAxisSelector.selected = 0
+		_on_archon_arch_axis_selected(0)
+		%ArchonArchAxisSelector.item_selected.connect(_on_archon_arch_axis_selected)
+		
+		# Wave Shape
+	if has_node("%ArchonWaveTypeSelector"):
+		var wt = mat.get_shader_parameter("WaveType")
+		%ArchonWaveTypeSelector.selected = int(wt) if wt != null else 0
+		# This connection was missing — without it selecting a wave type does nothing
+		%ArchonWaveTypeSelector.item_selected.connect(_on_archon_wave_type_selected)
+	if has_node("%ArchonWaveBlendSlider"):
+		%ArchonWaveBlendSlider.value_changed.connect(_on_archon_wave_blend_changed)
+	
+
+	# Inversion
+	if has_node("%ArchonInvRadiusSlider"):
+		%ArchonInvRadiusSlider.value_changed.connect(_on_archon_inv_radius_changed)
+	if has_node("%ArchonInvStrengthSlider"):
+		%ArchonInvStrengthSlider.value_changed.connect(_on_archon_inv_strength_changed)
+
+	# 4D Transform
+	if has_node("%ArchonRotationSlider"):
+		%ArchonRotationSlider.value_changed.connect(_on_archon_rotation_changed)
+	if has_node("%ArchonWRotationSpeedSlider"):
+		%ArchonWRotationSpeedSlider.value_changed.connect(_on_archon_w_rotation_speed_changed)
+
+	# Rendering
+	if has_node("%ArchonMaxStepsSlider"):
+		%ArchonMaxStepsSlider.value_changed.connect(_on_archon_max_steps_changed)
+	if has_node("%ArchonDetailSlider"):
+		%ArchonDetailSlider.value_changed.connect(_on_archon_detail_changed)
+
+	# Julia
+	if has_node("%ArchonJuliaToggle"):
+		%ArchonJuliaToggle.toggled.connect(_on_archon_julia_toggled)
+	if has_node("%ArchonJuliaMorphSlider"):
+		%ArchonJuliaMorphSlider.value_changed.connect(_on_archon_julia_morph_changed)
+	if has_node("%ArchonJuliaXSlider"):
+		%ArchonJuliaXSlider.value_changed.connect(_on_archon_julia_seed_changed)
+	if has_node("%ArchonJuliaYSlider"):
+		%ArchonJuliaYSlider.value_changed.connect(_on_archon_julia_seed_changed)
+	if has_node("%ArchonJuliaZSlider"):
+		%ArchonJuliaZSlider.value_changed.connect(_on_archon_julia_seed_changed)
+	if has_node("%ArchonJuliaWSlider"):
+		%ArchonJuliaWSlider.value_changed.connect(_on_archon_julia_seed_changed)
+	if has_node("%ArchonTypeSelector"):
+		%ArchonTypeSelector.selected = 0
+		%ArchonTypeSelector.item_selected.connect(_on_archon_type_selected)
+
+	if has_node("%ShapeTypeButton"):
+		%ShapeTypeButton.selected = 0
+	
+	
+		
+
+
+
+
+# === ARCHON HANDLERS ===
+
+
+# Reads current shader values and pushes them back to every Archon UI slider.
+# Called after load_preset() so the UI reflects what was loaded.
+
+func _on_archon_type_selected(index: int):
+	print("ArchonType selected: ", index)
+	var mat = get_fractal_material()
+	if mat:
+		mat.set_shader_parameter("ArchonType", index)
+		print("ArchonType shader param set to: ", mat.get_shader_parameter("ArchonType"))
+	else:
+		print("ERROR: No material found!")
+func _sync_archon_ui_from_shader():
+	var mat = get_fractal_material()
+	if not mat: return
+
+	# Helper to set a slider without triggering its value_changed signal
+	var _set = func(path: String, val):
+		if has_node(path):
+			var node = get_node(path)
+			node.set_block_signals(true)
+			node.value = float(val)
+			node.set_block_signals(false)
+
+	var _set_b = func(path: String, val):
+		if has_node(path):
+			var node = get_node(path)
+			node.set_block_signals(true)
+			node.button_pressed = bool(val)
+			node.set_block_signals(false)
+	if has_node("%ArchonTypeSelector"):
+		var at = mat.get_shader_parameter("ArchonType")
+		%ArchonTypeSelector.selected = int(at) if at != null else 0
+	if has_node("%ArchonSpinAxisSelector"):
+		%ArchonSpinAxisSelector.selected = 0
+	_on_archon_spin_axis_selected(0)
+
+	if has_node("%ArchonArchAxisSelector"):
+		%ArchonArchAxisSelector.selected = 0
+		_on_archon_arch_axis_selected(0)
+	
+	# --- Main ---
+	_set.call("%ArchonScaleSlider",      mat.get_shader_parameter("Scale"))
+	_set.call("%ArchonIterationsSlider", mat.get_shader_parameter("Iterations"))
+	_set.call("%ArchonBailoutSlider",    mat.get_shader_parameter("Bailout"))
+	_set.call("%ArchonTowerBiasSlider",  mat.get_shader_parameter("TowerBias"))
+
+	var ac = mat.get_shader_parameter("ArchonConstant")
+	if ac != null:
+		_set.call("%ArchonConstantXSlider", ac.x)
+		_set.call("%ArchonConstantYSlider", ac.y)
+		_set.call("%ArchonConstantZSlider", ac.z)
+		_set.call("%ArchonConstantWSlider", ac.w)
+
+	# --- Spin Fold ---
+	_set.call("%ArchonSpinStrengthSlider", mat.get_shader_parameter("SpinStrength"))
+
+	# --- Arch Warp ---
+	_set.call("%ArchonArchFreqSlider",   mat.get_shader_parameter("ArchFrequency"))
+	_set.call("%ArchonArchDepthSlider",  mat.get_shader_parameter("ArchDepth"))
+
+	# --- Inversion ---
+	_set.call("%ArchonInvRadiusSlider",   mat.get_shader_parameter("InvRadius"))
+	_set.call("%ArchonInvStrengthSlider", mat.get_shader_parameter("InvStrength"))
+
+	# --- 4D Transform ---
+	_set.call("%ArchonRotationSlider",        mat.get_shader_parameter("RotationAngle"))
+	_set.call("%ArchonWRotationSpeedSlider",  mat.get_shader_parameter("WRotationSpeed"))
+
+	# --- Rendering ---
+	_set.call("%ArchonMaxStepsSlider", mat.get_shader_parameter("MaxSteps"))
+	_set.call("%ArchonDetailSlider",   mat.get_shader_parameter("Detail"))
+
+	# --- Wave Shape ---
+	_set.call("%ArchonWaveBlendSlider", mat.get_shader_parameter("WaveBlend"))
+	if has_node("%ArchonWaveTypeSelector"):
+		var wt = mat.get_shader_parameter("WaveType")
+		%ArchonWaveTypeSelector.selected = int(wt) if wt != null else 0
+	# --- Julia ---
+	_set_b.call("%ArchonJuliaToggle",    mat.get_shader_parameter("JuliaMode"))
+	_set.call("%ArchonJuliaMorphSlider", mat.get_shader_parameter("JuliaMorph"))
+	var js = mat.get_shader_parameter("JuliaSeed")
+	if js != null:
+		_set.call("%ArchonJuliaXSlider", js.x)
+		_set.call("%ArchonJuliaYSlider", js.y)
+		_set.call("%ArchonJuliaZSlider", js.z)
+		_set.call("%ArchonJuliaWSlider", js.w)
+
+	# --- City Tiling ---
+	_set_b.call("%ArchonCityEnabledToggle",       mat.get_shader_parameter("CityEnabled"))
+	_set.call("%ArchonCellSizeSlider",            mat.get_shader_parameter("CellSize"))
+	_set.call("%ArchonCellRotVarianceSlider",     mat.get_shader_parameter("CellRotVariance"))
+	_set.call("%ArchonCellConstantVarianceSlider",mat.get_shader_parameter("CellConstantVariance"))
+	_set.call("%ArchonCellHeightVarianceSlider",  mat.get_shader_parameter("CellHeightVariance"))
+	_set.call("%ArchonAlleyWidthSlider",          mat.get_shader_parameter("AlleyWidth"))
+
+	# --- Shape ---
+	_set_b.call("%ShapeEnabledCheck",     mat.get_shader_parameter("ShapeEnabled"))
+	_set.call("%ShapeRadiusSlider",       mat.get_shader_parameter("ShapeRadius"))
+	_set.call("%ShapeThicknessSlider",    mat.get_shader_parameter("ShapeThickness"))
+	_set.call("%ShapeBendSlider",         mat.get_shader_parameter("ShapeBend"))
+	_set.call("%GrainIntensitySlider",    mat.get_shader_parameter("GrainIntensity"))
+	_set.call("%TentacleCountSlider",     mat.get_shader_parameter("TentacleCount"))
+	_set.call("%TentacleLengthSlider",    mat.get_shader_parameter("TentacleLength"))
+	_set.call("%TentacleTwistSlider",     mat.get_shader_parameter("TentacleTwist"))
+	if has_node("%ShapeTypeButton"):
+		var st = mat.get_shader_parameter("ShapeType")
+		var st_int = int(st) if st != null else 0
+		%ShapeTypeButton.selected = max(0, st_int)
+	# --- Symmetry ---
+	_set_b.call("%AbsXToggle", mat.get_shader_parameter("F_absX"))
+	_set_b.call("%AbsYToggle", mat.get_shader_parameter("F_absY"))
+	_set_b.call("%AbsZToggle", mat.get_shader_parameter("F_absZ"))
+	_set_b.call("%XSwapToggle", mat.get_shader_parameter("F_X"))
+	_set_b.call("%YSwapToggle", mat.get_shader_parameter("F_Y"))
+	_set_b.call("%ZSwapToggle", mat.get_shader_parameter("F_Z"))
+	_set.call("%KIFSAngleXSlider", mat.get_shader_parameter("KIFS_Angle_X"))
+	_set.call("%KIFSAngleYSlider", mat.get_shader_parameter("KIFS_Angle_Y"))
+	_set.call("%KIFSAngleZSlider", mat.get_shader_parameter("KIFS_Angle_Z"))
+
+	# Now update all labels to match the restored values
+	_on_archon_scale_changed(get_v("%ArchonScaleSlider", 2.0))
+	_on_archon_iterations_changed(get_v("%ArchonIterationsSlider", 20.0))
+	_on_archon_bailout_changed(get_v("%ArchonBailoutSlider", 8.0))
+	_on_archon_tower_bias_changed(get_v("%ArchonTowerBiasSlider", 1.8))
+	_on_archon_constant_changed(0.0)
+	_on_archon_spin_strength_changed(get_v("%ArchonSpinStrengthSlider", 0.4))
+	_on_archon_arch_freq_changed(get_v("%ArchonArchFreqSlider", 1.5))
+	_on_archon_arch_depth_changed(get_v("%ArchonArchDepthSlider", 0.4))
+	_on_archon_inv_radius_changed(get_v("%ArchonInvRadiusSlider", 1.2))
+	_on_archon_inv_strength_changed(get_v("%ArchonInvStrengthSlider", 0.8))
+	_on_archon_rotation_changed(get_v("%ArchonRotationSlider", 0.3))
+	_on_archon_w_rotation_speed_changed(get_v("%ArchonWRotationSpeedSlider", 0.0))
+	_on_archon_max_steps_changed(get_v("%ArchonMaxStepsSlider", 128.0))
+	_on_archon_detail_changed(get_v("%ArchonDetailSlider", -2.5))
+	_on_archon_wave_blend_changed(get_v("%ArchonWaveBlendSlider", 1.0))
+	_on_archon_cell_size_changed(get_v("%ArchonCellSizeSlider", 4.0))
+	_on_archon_cell_rot_variance_changed(get_v("%ArchonCellRotVarianceSlider", 0.8))
+	_on_archon_cell_constant_variance_changed(get_v("%ArchonCellConstantVarianceSlider", 0.3))
+	_on_archon_cell_height_variance_changed(get_v("%ArchonCellHeightVarianceSlider", 0.4))
+	_on_archon_alley_width_changed(get_v("%ArchonAlleyWidthSlider", 0.15))
+
+	print("Archon UI synced from shader.")
+
+func _on_archon_city_enabled_toggled(pressed: bool):
+	var mat = get_fractal_material()
+	if mat: mat.set_shader_parameter("CityEnabled", pressed)
+
+func _on_archon_cell_size_changed(value: float):
+	var mat = get_fractal_material()
+	if mat: mat.set_shader_parameter("CellSize", value)
+	if has_node("%ArchonCellSizeLabel"):
+		%ArchonCellSizeLabel.text = "Cell Size: " + str(snapped(value, 0.1))
+
+func _on_archon_cell_rot_variance_changed(value: float):
+	var mat = get_fractal_material()
+	if mat: mat.set_shader_parameter("CellRotVariance", value)
+	if has_node("%ArchonCellRotVarianceLabel"):
+		%ArchonCellRotVarianceLabel.text = "Rotation Variance: " + str(snapped(value, 0.01))
+
+func _on_archon_cell_constant_variance_changed(value: float):
+	var mat = get_fractal_material()
+	if mat: mat.set_shader_parameter("CellConstantVariance", value)
+	if has_node("%ArchonCellConstantVarianceLabel"):
+		%ArchonCellConstantVarianceLabel.text = "Ruin Variance: " + str(snapped(value, 0.01))
+
+func _on_archon_cell_height_variance_changed(value: float):
+	var mat = get_fractal_material()
+	if mat: mat.set_shader_parameter("CellHeightVariance", value)
+	if has_node("%ArchonCellHeightVarianceLabel"):
+		%ArchonCellHeightVarianceLabel.text = "Height Variance: " + str(snapped(value, 0.01))
+
+func _on_archon_alley_width_changed(value: float):
+	var mat = get_fractal_material()
+	if mat: mat.set_shader_parameter("AlleyWidth", value)
+	if has_node("%ArchonAlleyWidthLabel"):
+		%ArchonAlleyWidthLabel.text = "Alley Width: " + str(snapped(value, 0.01))
+
+func _on_archon_wave_type_selected(index: int):
+	var mat = get_fractal_material()
+	if mat: mat.set_shader_parameter("WaveType", index)
+	# Optional: print a hint so you know what you picked
+	var names = ["Sine", "Triangle", "Square", "Sawtooth", "Bounce"]
+	print("Archon WaveType -> ", names[index])
+
+func _on_archon_wave_blend_changed(value: float):
+	var mat = get_fractal_material()
+	if mat: mat.set_shader_parameter("WaveBlend", value)
+	if has_node("%ArchonWaveBlendLabel"):
+		%ArchonWaveBlendLabel.text = "Wave Blend: " + str(snapped(value, 0.01))
+
+func _on_archon_scale_changed(value: float):
+	var mat = get_fractal_material()
+	if mat: mat.set_shader_parameter("Scale", value)
+	if has_node("%ArchonScaleLabel"):
+		%ArchonScaleLabel.text = "Scale: " + str(snapped(value, 0.01))
+
+func _on_archon_iterations_changed(value: float):
+	var mat = get_fractal_material()
+	if mat: mat.set_shader_parameter("Iterations", int(value))
+	if has_node("%ArchonIterationsLabel"):
+		%ArchonIterationsLabel.text = "Iterations: " + str(int(value))
+
+func _on_archon_bailout_changed(value: float):
+	var mat = get_fractal_material()
+	if mat: mat.set_shader_parameter("Bailout", value)
+	if has_node("%ArchonBailoutLabel"):
+		%ArchonBailoutLabel.text = "Bailout: " + str(snapped(value, 0.1))
+
+func _on_archon_tower_bias_changed(value: float):
+	var mat = get_fractal_material()
+	if mat: mat.set_shader_parameter("TowerBias", value)
+	if has_node("%ArchonTowerBiasLabel"):
+		%ArchonTowerBiasLabel.text = "Tower Bias: " + str(snapped(value, 0.01))
+
+func _on_archon_constant_changed(_v: float):
+	var mat = get_fractal_material()
+	if not mat: return
+	var val = Vector4(
+		get_v("%ArchonConstantXSlider", 1.0),
+		get_v("%ArchonConstantYSlider", 1.3),
+		get_v("%ArchonConstantZSlider", 0.8),
+		get_v("%ArchonConstantWSlider", 0.2)
+	)
+	mat.set_shader_parameter("ArchonConstant", val)
+	if has_node("%ArchonConstantXLabel"): %ArchonConstantXLabel.text = "Constant X: " + str(snapped(val.x, 0.01))
+	if has_node("%ArchonConstantYLabel"): %ArchonConstantYLabel.text = "Constant Y: " + str(snapped(val.y, 0.01))
+	if has_node("%ArchonConstantZLabel"): %ArchonConstantZLabel.text = "Constant Z: " + str(snapped(val.z, 0.01))
+	if has_node("%ArchonConstantWLabel"): %ArchonConstantWLabel.text = "Constant W: " + str(snapped(val.w, 0.01))
+
+func _on_archon_spin_strength_changed(value: float):
+	var mat = get_fractal_material()
+	if mat: mat.set_shader_parameter("SpinStrength", value)
+	if has_node("%ArchonSpinStrengthLabel"):
+		%ArchonSpinStrengthLabel.text = "Spin Strength: " + str(snapped(value, 0.01))
+
+func _on_archon_spin_axis_selected(index: int):
+	var mat = get_fractal_material()
+	if not mat: return
+	# 0=Y axis (columns), 1=X axis (arches), 2=Z axis (rings)
+	var axes = [Vector3(0,1,0), Vector3(1,0,0), Vector3(0,0,1)]
+	mat.set_shader_parameter("SpinAxis", axes[index])
+
+func _on_archon_arch_freq_changed(value: float):
+	var mat = get_fractal_material()
+	if mat: mat.set_shader_parameter("ArchFrequency", value)
+	if has_node("%ArchonArchFreqLabel"):
+		%ArchonArchFreqLabel.text = "Arch Frequency: " + str(snapped(value, 0.01))
+
+func _on_archon_arch_depth_changed(value: float):
+	var mat = get_fractal_material()
+	if mat: mat.set_shader_parameter("ArchDepth", value)
+	if has_node("%ArchonArchDepthLabel"):
+		%ArchonArchDepthLabel.text = "Arch Depth: " + str(snapped(value, 0.01))
+
+func _on_archon_arch_axis_selected(index: int):
+	var mat = get_fractal_material()
+	if mat: mat.set_shader_parameter("ArchAxis", index)
+
+func _on_archon_inv_radius_changed(value: float):
+	var mat = get_fractal_material()
+	if mat: mat.set_shader_parameter("InvRadius", value)
+	if has_node("%ArchonInvRadiusLabel"):
+		%ArchonInvRadiusLabel.text = "Inv Radius: " + str(snapped(value, 0.01))
+
+func _on_archon_inv_strength_changed(value: float):
+	var mat = get_fractal_material()
+	if mat: mat.set_shader_parameter("InvStrength", value)
+	if has_node("%ArchonInvStrengthLabel"):
+		%ArchonInvStrengthLabel.text = "Inv Strength: " + str(snapped(value, 0.01))
+
+func _on_archon_rotation_changed(value: float):
+	var mat = get_fractal_material()
+	if mat: mat.set_shader_parameter("RotationAngle", value)
+	if has_node("%ArchonRotationLabel"):
+		%ArchonRotationLabel.text = "4D Rotation: " + str(snapped(value, 0.01))
+
+func _on_archon_w_rotation_speed_changed(value: float):
+	var mat = get_fractal_material()
+	if mat: mat.set_shader_parameter("WRotationSpeed", value)
+	if has_node("%ArchonWRotationSpeedLabel"):
+		%ArchonWRotationSpeedLabel.text = "W Anim Speed: " + str(snapped(value, 0.01))
+
+func _on_archon_max_steps_changed(value: float):
+	var mat = get_fractal_material()
+	if mat: mat.set_shader_parameter("MaxSteps", int(value))
+	if has_node("%ArchonMaxStepsLabel"):
+		%ArchonMaxStepsLabel.text = "Max Steps: " + str(int(value))
+
+func _on_archon_detail_changed(value: float):
+	var mat = get_fractal_material()
+	if mat: mat.set_shader_parameter("Detail", value)
+	if has_node("%ArchonDetailLabel"):
+		%ArchonDetailLabel.text = "Detail: " + str(snapped(value, 0.01))
+
+func _on_archon_julia_toggled(pressed: bool):
+	var mat = get_fractal_material()
+	if mat: mat.set_shader_parameter("JuliaMode", pressed)
+
+func _on_archon_julia_morph_changed(value: float):
+	var mat = get_fractal_material()
+	if mat: mat.set_shader_parameter("JuliaMorph", value)
+	if has_node("%ArchonJuliaMorphLabel"):
+		%ArchonJuliaMorphLabel.text = "Julia Morph: " + str(snapped(value, 0.01))
+
+func _on_archon_julia_seed_changed(_v: float):
+	var mat = get_fractal_material()
+	if not mat: return
+	var seed = Vector4(
+		get_v("%ArchonJuliaXSlider", 1.0),
+		get_v("%ArchonJuliaYSlider", 1.3),
+		get_v("%ArchonJuliaZSlider", 0.8),
+		get_v("%ArchonJuliaWSlider", 0.2)
+	)
+	mat.set_shader_parameter("JuliaSeed", seed)
+	if has_node("%ArchonJuliaXLabel"): %ArchonJuliaXLabel.text = "Julia X: " + str(snapped(seed.x, 0.01))
+	if has_node("%ArchonJuliaYLabel"): %ArchonJuliaYLabel.text = "Julia Y: " + str(snapped(seed.y, 0.01))
+	if has_node("%ArchonJuliaZLabel"): %ArchonJuliaZLabel.text = "Julia Z: " + str(snapped(seed.z, 0.01))
+	if has_node("%ArchonJuliaWLabel"): %ArchonJuliaWLabel.text = "Julia W: " + str(snapped(seed.w, 0.01))
+
+func _sync_archon_to_shader():
+	var mat = get_fractal_material()
+	if not mat: return
+	
+	# Push hardcoded defaults directly — safe even if sliders don't exist yet
+	mat.set_shader_parameter("Scale", 2.0)
+	mat.set_shader_parameter("Iterations", 20)
+	mat.set_shader_parameter("Bailout", 8.0)
+	mat.set_shader_parameter("TowerBias", 0.0)
+	mat.set_shader_parameter("ArchonConstant", Vector4(1.0, 1.3, 0.8, 0.2))
+	mat.set_shader_parameter("SpinStrength", 0.0)
+	mat.set_shader_parameter("SpinAxis", Vector3(0.0, 1.0, 0.0))
+	mat.set_shader_parameter("ArchFrequency", 1.5)
+	mat.set_shader_parameter("ArchDepth",  0.4)
+	mat.set_shader_parameter("ArchAxis", 0)
+	mat.set_shader_parameter("InvRadius", 1.2)
+	mat.set_shader_parameter("InvStrength", 0.8)
+	mat.set_shader_parameter("RotationAngle", 0.3)
+	mat.set_shader_parameter("WRotationSpeed", 0.0)
+	mat.set_shader_parameter("MaxSteps", 200)
+	mat.set_shader_parameter("Detail", -1.0)
+	mat.set_shader_parameter("JuliaMode", false)
+	mat.set_shader_parameter("JuliaMorph", 0.0)
+	mat.set_shader_parameter("JuliaSeed", Vector4(1.0, 1.3, 0.8, 0.2))
+	mat.set_shader_parameter("WaveType", 0)    # 0 = Sine (safe default)
+	mat.set_shader_parameter("WaveBlend", 1.0)
+	# Shape defaults — off by default, safe to switch on from Shapes tab
+	mat.set_shader_parameter("ShapeEnabled", false)
+	mat.set_shader_parameter("ShapeType", 0)
+	mat.set_shader_parameter("ShapeRadius", 1.5)
+	mat.set_shader_parameter("ShapeThickness", 0.4)
+	mat.set_shader_parameter("ShapeBend", 0.0)
+	mat.set_shader_parameter("ShapeOffset", Vector3(0.0, 0.0, 0.0))
+	mat.set_shader_parameter("GrainIntensity", 0.0)
+	mat.set_shader_parameter("TentacleCount", 0.0)
+	mat.set_shader_parameter("TentacleLength", 0.0)
+	mat.set_shader_parameter("TentacleTwist", 0.0)
+	mat.set_shader_parameter("CityEnabled", false)
+	mat.set_shader_parameter("CellSize", 4.0)
+	mat.set_shader_parameter("CellRotVariance", 0.8)
+	mat.set_shader_parameter("CellConstantVariance", 0.3)
+	mat.set_shader_parameter("CellHeightVariance", 0.4)
+	mat.set_shader_parameter("AlleyWidth", 0.15)
+	mat.set_shader_parameter("ArchonType", 0)
+
+	
+	# Then override with slider values if they exist
+	_on_archon_scale_changed(get_v("%ArchonScaleSlider", 2.0))
+	_on_archon_iterations_changed(get_v("%ArchonIterationsSlider", 20))
+	print("Archon shader synced.")
+
+	
+	if has_node("%ArchonCityEnabledToggle"):
+		%ArchonCityEnabledToggle.button_pressed = false
+	if has_node("%ArchonCellSizeSlider"):
+		%ArchonCellSizeSlider.value = 4.0
+		_on_archon_cell_size_changed(4.0)
+	if has_node("%ArchonCellRotVarianceSlider"):
+		%ArchonCellRotVarianceSlider.value = 0.8
+	if has_node("%ArchonCellConstantVarianceSlider"):
+		%ArchonCellConstantVarianceSlider.value = 0.3
+	if has_node("%ArchonCellHeightVarianceSlider"):
+		%ArchonCellHeightVarianceSlider.value = 0.4
+	if has_node("%ArchonAlleyWidthSlider"):
+		%ArchonAlleyWidthSlider.value = 0.15
+
+	
+	
+	
 
 
 
@@ -588,6 +1228,46 @@ func _on_warp_frequency_changed(value: float):
 
 
 # === Amazing Surf Parameter Updates ===
+
+func _on_shape_offset_changed(_v):
+	# Update labels with prefixes
+	%ShapeOffsetXLabel.text = "Offset X: " + str(snapped(%ShapeOffsetXSlider.value, 0.01))
+	%ShapeOffsetYLabel.text = "Offset Y: " + str(snapped(%ShapeOffsetYSlider.value, 0.01))
+	%ShapeOffsetZLabel.text = "Offset Z: " + str(snapped(%ShapeOffsetZSlider.value, 0.01))
+	
+	# Push the combined Vector3 to the shader
+	var offset = Vector3(
+		%ShapeOffsetXSlider.value, 
+		%ShapeOffsetYSlider.value, 
+		%ShapeOffsetZSlider.value
+	)
+	get_fractal_material().set_shader_parameter("ShapeOffset", offset)
+
+func _update_shape_offset(_v):
+	var offset = Vector3(%ShapeOffsetXSlider.value, %ShapeOffsetYSlider.value, %ShapeOffsetZSlider.value)
+	get_fractal_material().set_shader_parameter("ShapeOffset", offset)
+
+
+func _on_ribbon_warp_strength_changed(value: float):
+	var mat = get_fractal_material()
+	if mat:
+		mat.set_shader_parameter("WarpStrength", value)
+	if has_node("%RibbonWarpStrengthLabel"):
+		%RibbonWarpStrengthLabel.text = "Ribbon Warp Strength: " + str(snapped(value, 0.01))
+
+func _on_ribbon_warp_frequency_changed(value: float):
+	var mat = get_fractal_material()
+	if mat:
+		mat.set_shader_parameter("WarpFrequency", value)
+	if has_node("%RibbonWarpFrequencyLabel"):
+		%RibbonWarpFrequencyLabel.text = "Ribbon Warp Freq: " + str(snapped(value, 0.01))
+
+func _on_ribbon_twist_changed(value: float):
+	var mat = get_fractal_material()
+	if mat:
+		mat.set_shader_parameter("RibbonTwist", value)
+	if has_node("%RibbonTwistLabel"):
+		%RibbonTwistLabel.text = "Ribbon Twist: " + str(snapped(value, 0.01))
 
 func _on_kifs_axis_selected(index: int):
 	var mat = get_fractal_material()
@@ -1115,7 +1795,12 @@ func _on_menger_max_steps_changed(value: float):
 	if has_node("%MengerMaxStepsLabel"):
 		%MengerMaxStepsLabel.text = "Max Steps: " + str(int(value))
 
-
+func _on_menger_detail_changed(value: float):
+	var mat = get_fractal_material()
+	if mat:
+		mat.set_shader_parameter("Detail", value)
+	if has_node("%MengerDetailLabel"):
+		%MengerDetailLabel.text = "Detail: " + str(snapped(value, 0.01))
 
 func _update_kifs_mask(_toggled_state: bool = false):
 	# Check if all nodes exist before trying to read them
@@ -1243,6 +1928,15 @@ func setup_navigation_tree():
 	var sym = %NavigationTree.create_item(root)
 	sym.set_text(0, "Symmetry Folding")
 	sym.set_metadata(0, 6) 
+	
+	# --- Shapes ---
+	var shapes = %NavigationTree.create_item(root)
+	shapes.set_text(0, "Shapes")
+	shapes.set_metadata(0, 7) 
+	
+	var archon = %NavigationTree.create_item(fractal_node)
+	archon.set_text(0, "Archon")
+	archon.set_metadata(0, 8)
 
 
 func _on_speed_changed(value: float):
@@ -1538,6 +2232,20 @@ func _on_tree_item_selected():
 			var c3 = %ColorPicker3.color
 			mat.set_shader_parameter("Color3", Vector3(c3.r, c3.g, c3.b))
 		print("Switched to BristorBrot")
+	
+	elif selected.get_text(0) == "Archon":
+		current_fractal = "Archon"
+		mat.shader = archon_shader
+		# Only set defaults and move camera on the very first load.
+		# After that, switching back just restores the shader without touching values.
+		if not archon_initialized:
+			if main_camera:
+				main_camera.global_position = Vector3(0.0, 0.0, 6.0)
+				main_camera.rotation_degrees = Vector3.ZERO
+			_sync_archon_to_shader()
+			archon_initialized = true
+		print("Switched to Archon")
+
 
 	
 	if OS.is_debug_build():
@@ -1832,36 +2540,74 @@ func _on_add_waypoint_pressed():
 	var point = {
 		"pos": main_camera.global_position,
 		"rot": main_camera.global_transform.basis,
-		"w": get_v("%WSlider"), # Now calls the function at the bottom
+		"fractal_type": current_fractal,
+		"w": get_v("%WSlider"),
 		
 		"floats": {
 			# Main
 			"SymmetryStrength": Vector3(get_v("%PFiveSlider"), get_v("%PFiveSlider"), get_v("%PFiveSlider")),
 			"F_offset": Vector3(get_v("%FoldOffsetSlider"), get_v("%FoldOffsetSlider"), get_v("%FoldOffsetSlider")),
 			"Power": get_v("%PowerSlider"),
-			"Scale": get_v("%SurfScaleSlider2", 2.0) if current_fractal == "AmazingSurf" else get_v("%ScaleSlider", 2.0),
-			"Bailout": get_v("%BailoutSlider", 4.0) if current_fractal == "AmazingSurf" else get_v("%BailoutSlider", 100.0),
+			"Scale": get_v("%SurfScaleSlider2", 2.0) if current_fractal == "AmazingSurf" else (get_v("%ScaleSlider", 2.5) if current_fractal == "Mandelbox" else (get_v("%ArchonScaleSlider", 2.0) if current_fractal == "Archon" else 1.0)),
+			"Bailout": get_v("%BailoutSlider", 4.0) if current_fractal == "AmazingSurf" else (get_v("%ArchonBailoutSlider", 8.0) if current_fractal == "Archon" else get_v("%BailoutSlider", 100.0)),
 			"ScaleVary": get_v("%ScaleVarySlider"),
 			"DEMultiplier": get_v("%DEMultiplierSlider", 1.0),
-			"MengerScale": get_v("%MengerScaleSlider", 1.0),
+			"MengerScale": get_v("%MengerScaleSlider", 3.0) if current_fractal == "Menger" else 3.0,
+			"BoxFoldLimit": get_v("%BoxFoldSlider", 1.0) if current_fractal == "Mandelbox" else 1.0,
 			"InvParamA": get_v("%InvParamA"),
 			"InvScale": get_v("%FixedRadiusSlider"),
-			"RotationAngle": get_v("%ASurfRotationSlider", 0.0) if current_fractal == "AmazingSurf" else get_v("%RotationSlider"),
+			"InvRadius": get_v("%ArchonInvRadiusSlider", 1.2),
+			"InvStrength": get_v("%ArchonInvStrengthSlider", 0.8),
+			"RotationAngle": get_v("%Rotations4DSlider", 0.0) if current_fractal == "Menger" else (get_v("%ASurfRotationSlider", 0.0) if current_fractal == "AmazingSurf" else (get_v("%ArchonRotationSlider", 0.3) if current_fractal == "Archon" else get_v("%RotationSlider", 0.0))),
 			"Reflectivity": get_v("%ReflectSlider"),
 			"FogDensity": get_v("%FogSlider"),
 			"Brightness": get_v("%BrightnessSlider", 1.0),
-			"Iterations": get_v("%SurfIterationsSlider", 12),
-			
-			# Folding (Using Vector4 for the shader uniform)
+			"Iterations": int(get_v("%IterationsSlider", 8)) if current_fractal == "Menger" else (int(get_v("%SurfIterationsSlider", 6)) if current_fractal == "AmazingSurf" else (int(get_v("%ArchonIterationsSlider", 20)) if current_fractal == "Archon" else int(get_v("%StepsSlider", 17)))),
+			"MaxSteps": int(get_v("%MengerMaxStepsSlider", 256)) if current_fractal == "Menger" else (int(get_v("%ASMaxStepsSlider", 64)) if current_fractal == "AmazingSurf" else (int(get_v("%ArchonMaxStepsSlider", 200)) if current_fractal == "Archon" else int(get_v("%StepsSlider", 256)))),
+			"Detail": get_v("%MengerDetailSlider", -2.5) if current_fractal == "Menger" else (get_v("%ASDetailSlider", -1.0) if current_fractal == "AmazingSurf" else (get_v("%ArchonDetailSlider", -1.0) if current_fractal == "Archon" else get_v("%DetailSlider", -2.5))),
+
+			# Archon-specific (safe to always include — ignored by other shaders)
+			"TowerBias": get_v("%ArchonTowerBiasSlider", 0.0),
+			"SpinStrength": get_v("%ArchonSpinStrengthSlider", 0.0),
+			"ArchFrequency": get_v("%ArchonArchFreqSlider", 1.5),
+			"ArchDepth": get_v("%ArchonArchDepthSlider", 0.4),
+			"WRotationSpeed": get_v("%ArchonWRotationSpeedSlider", 0.0),
+			"WaveBlend": get_v("%ArchonWaveBlendSlider", 1.0),
+			"JuliaMorph": get_v("%ArchonJuliaMorphSlider", 0.0) if current_fractal == "Archon" else get_v("%MS4DMorphSlider"),
+			"JuliaSeed": Vector4(
+				get_v("%ArchonJuliaXSlider"), get_v("%ArchonJuliaYSlider"),
+				get_v("%ArchonJuliaZSlider"), get_v("%ArchonJuliaWSlider")
+			) if current_fractal == "Archon" else (Vector4(
+				get_v("%MS4DJuliaXSlider"), get_v("%MS4DJuliaYSlider"),
+				get_v("%MS4DJuliaZSlider"), get_v("%MS4DJuliaWSlider")
+			) if current_fractal == "Menger" else Vector4(
+				get_v("%ASurfJuliaXSlider"), get_v("%ASurfJuliaYSlider"),
+				get_v("%ASurfJuliaZSlider"), 0.0
+			)),
+			"ArchonConstant": Vector4(
+				get_v("%ArchonConstantXSlider", 1.0),
+				get_v("%ArchonConstantYSlider", 1.3),
+				get_v("%ArchonConstantZSlider", 0.8),
+				get_v("%ArchonConstantWSlider", 0.2)
+			),
+
+			# City Tiling
+			"CellSize": get_v("%ArchonCellSizeSlider", 4.0),
+			"CellRotVariance": get_v("%ArchonCellRotVarianceSlider", 0.8),
+			"CellConstantVariance": get_v("%ArchonCellConstantVarianceSlider", 0.3),
+			"CellHeightVariance": get_v("%ArchonCellHeightVarianceSlider", 0.4),
+			"AlleyWidth": get_v("%ArchonAlleyWidthSlider", 0.15),
+
+			# Folding
 			"FoldLimit4D": Vector4(
-				get_v("%FoldLimitXSlider", 1.0), 
-				get_v("%FoldLimitYSlider", 1.0), 
-				get_v("%FoldLimitZSlider", 1.0), 
+				get_v("%FoldLimitXSlider", 1.0),
+				get_v("%FoldLimitYSlider", 1.0),
+				get_v("%FoldLimitZSlider", 1.0),
 				get_v("%FoldLimitWSlider", 1.0)
 			),
 			"FoldingValue": get_v("%FoldingValueSlider"),
 			"Offset2": get_v("%Offset2Slider"),
-			
+
 			# Transforms
 			"PreOffset": Vector3(get_v("%PreOffsetXSlider"), get_v("%PreOffsetYSlider"), get_v("%PreOffsetZSlider")),
 			"PostOffset": Vector3(get_v("%PostOffsetXSlider"), get_v("%PostOffsetYSlider"), get_v("%PostOffsetZSlider")),
@@ -1870,58 +2616,57 @@ func _on_add_waypoint_pressed():
 			"KIFS_Twist": get_v("%KIFS_Twist_Slider", 0.0),
 			"KIFS_Axis": float(max(0, %KIFS_Axis_Selector.selected)) if has_node("%KIFS_Axis_Selector") else 0.0,
 
-			# Amazing Surf Specifics
-			"JuliaSeed": Vector4(
-				get_v("%ASurfJuliaXSlider"), 
-				get_v("%ASurfJuliaYSlider"), 
-				get_v("%ASurfJuliaZSlider"), 
-				0.0 # The 4th component to make it a Vector4
-			),
+			# Warp / BristorBrot
+			"WOffset": get_v("%WOffsetSlider"),
+			"WarpStrength": get_v("%RibbonWarpStrengthSlider") if current_fractal == "AmazingSurf" else get_v("%WarpStrengthSlider"),
+			"WarpFrequency": get_v("%RibbonWarpFrequencySlider") if current_fractal == "AmazingSurf" else get_v("%WarpFrequencySlider"),
+			"RibbonTwist": get_v("%RibbonTwistSlider") if current_fractal == "AmazingSurf" else 0.0,
+			"RotationXW": get_v("%RotationXWSlider"),
+			"RotationYW": get_v("%RotationYWSlider"),
+			"RotationZW": get_v("%RotationZWSlider"),
+			"RippleFrequency": get_v("%RippleFrequencySlider"),
+			"RippleAmplitude": get_v("%RippleAmplitudeSlider"),
+			"KIFS_Angle_X": get_v("%KIFSAngleXSlider"),
+			"KIFS_Angle_Y": get_v("%KIFSAngleYSlider"),
+			"KIFS_Angle_Z": get_v("%KIFSAngleZSlider"),
+
+			# Amazing Surf surface
 			"SurfScale": get_v("%SurfScaleSlider"),
 			"SurfStrength": get_v("%SurfStrengthSlider"),
 			"SurfRoughness": get_v("%SurfRoughnessSlider"),
 			"SurfSpeed": get_v("%SurfSpeedSlider"),
-			"MaxSteps": int(get_v("%ASMaxStepsSlider", 64)),
-			"Detail": get_v("%ASDetailSlider", -1.0),
-			
-			
-			
+
+			# Menger specific
 			"MengerOffset1": Vector4(
-				get_v("%MengerOffset1_xSlider", 1.0), 
-				get_v("%MengerOffset1_ySlider", 1.0), 
-				get_v("%MengerOffset1_zSlider", 1.0), 
+				get_v("%MengerOffset1_xSlider", 1.0),
+				get_v("%MengerOffset1_ySlider", 1.0),
+				get_v("%MengerOffset1_zSlider", 1.0),
 				get_v("%MengerOffset1_wSlider", 1.0),
 			),
-			# BristorBrot / Warp Parameters
-				"WOffset": get_v("%WOffsetSlider"),
-				"WarpStrength": get_v("%WarpStrengthSlider"),
-				"WarpFrequency": get_v("%WarpFrequencySlider"),
 
-				# 4D Plane Rotations (From your ASurf section)
-				"RotationXW": get_v("%RotationXWSlider"),
-				"RotationYW": get_v("%RotationYWSlider"),
-				"RotationZW": get_v("%RotationZWSlider"),
-
-				# Ripple/Deformation Logic
-				"RippleFrequency": get_v("%RippleFrequencySlider"),
-				"RippleAmplitude": get_v("%RippleAmplitudeSlider"),
-
-				# KIFS Twists (You have individual sliders for these)
-				"KIFS_Angle_X": get_v("%KIFSAngleXSlider"),
-				"KIFS_Angle_Y": get_v("%KIFSAngleYSlider"),
-				"KIFS_Angle_Z": get_v("%KIFSAngleZSlider"),
-			# Rendering
+			# Rendering / Post
 			"SliceW": get_v("%SliceWSlider"),
 			"VolumeDensity": get_v("%VolumeDensitySlider"),
 			"Saturation": get_v("%SaturationSlider", 1.0),
-			"Contrast": get_v("%ContrastSlider", 1.0)
-			
-			
-			
+			"Contrast": get_v("%ContrastSlider", 1.0),
+			"ShapeRadius": get_v("%ShapeRadiusSlider", 1.0),
+			"ShapeThickness": get_v("%ShapeThicknessSlider", 0.4),
+			"ShapeBend": get_v("%ShapeBendSlider", 0.0),
+			"GrainIntensity": get_v("%GrainIntensitySlider", 0.0),
+			"TentacleCount": get_v("%TentacleCountSlider", 0.0),
+			"TentacleLength": get_v("%TentacleLengthSlider", 0.0),
+			"TentacleTwist": get_v("%TentacleTwistSlider", 0.0),
+			"ShapeOffset": Vector3(
+				get_v("%ShapeOffsetXSlider", 0.0),
+				get_v("%ShapeOffsetYSlider", 0.0),
+				get_v("%ShapeOffsetZSlider", 0.0)),
+			"ShapeEnabled": get_b("%ShapeEnabledCheck"),
+			"ShapeType": max(0, %ShapeTypeButton.selected) if has_node("%ShapeTypeButton") else 0,
+
 		},
 		
 		"states": {
-			"JuliaMode": get_b("%ASurfJuliaToggle"),
+			"JuliaMode": get_b("%ArchonJuliaToggle") if current_fractal == "Archon" else (get_b("%MS4DJuliaToggle") if current_fractal == "Menger" else get_b("%ASurfJuliaToggle")),
 			"SphereFoldEnabled": get_b("%SphereFoldToggle"),
 			"FoldSlot1Enabled": get_b("%FoldSlot1Toggle"),
 			"FoldSlot2Enabled": get_b("%FoldSlot2Toggle"),
@@ -1935,45 +2680,42 @@ func _on_add_waypoint_pressed():
 			"F_X": get_b("%XSwapToggle"),
 			"F_Y": get_b("%YSwapToggle"),
 			"F_Z": get_b("%ZSwapToggle"),
-			"JuliaMorph": get_v("%MS4DMorphSlider"), # Note: Treat as state or float depending on how you tween it
 
-			# Amazing Surf Folding Logic
+			# Amazing Surf Folding
 			"EnableZAxisFold": get_b("%EnableZAxisToggle"),
 			"EnableWAxisFold": get_b("%EnableWAxisToggle"),
 			"ForceCylinderFold": get_b("%CylinderFoldToggle"),
 
-
-			# Fold Types (The Dropdowns)
+			# Fold Types
 			"FoldType1": %FoldType1Selector.selected if has_node("%FoldType1Selector") else 0,
 			"FoldType2": %FoldType2Selector.selected if has_node("%FoldType2Selector") else 0,
 			"FoldType3": %FoldType3Selector.selected if has_node("%FoldType3Selector") else 0,
 
-			# DE & Bristor Logic
+			# DE & Bristor
 			"DEMethod": %DEMethodSelector.selected if has_node("%DEMethodSelector") else 0,
 			"draw_parallel": get_b("%ParallelToggle"),
-			
-			
-			
+
+			# Archon
+			"ArchonWaveType": %ArchonWaveTypeSelector.selected if has_node("%ArchonWaveTypeSelector") else 0,
+			"CityEnabled": get_b("%ArchonCityEnabledToggle"),
+			"ArchonType": max(0, %ArchonTypeSelector.selected) if has_node("%ArchonTypeSelector") else 0,
 		}
 	}
 	
-	# NEW: Debug Comparison Logic
+	# Debug Comparison Logic
 	if waypoints.size() > 0:
 		var last = waypoints[-1]
 		print("\n--- WAYPOINT #", waypoints.size() + 1, " DIFF REPORT ---")
 		
-		# Check Position
 		if last.pos.distance_to(point.pos) > 0.01:
 			print("  [MOVE] Dist: ", last.pos.distance_to(point.pos))
 		
-		# Check Rotation (The Culprit!)
 		var angle_diff = last.rot.get_rotation_quaternion().angle_to(point.rot.get_rotation_quaternion())
 		if angle_diff > 0.01:
 			print("  [ROT] Angle Change: ", rad_to_deg(angle_diff), " degrees")
 		else:
 			print("  [!] WARNING: No rotation detected between points.")
 
-		# Check Floats
 		for f in point.floats:
 			if last.floats.has(f) and last.floats[f] != point.floats[f]:
 				print("  [PARAM] ", f, ": ", last.floats[f], " -> ", point.floats[f])
@@ -1981,7 +2723,7 @@ func _on_add_waypoint_pressed():
 	waypoints.append(point)
 	print("SUCCESS: Waypoint #", waypoints.size(), " recorded.\n")
 	
-	# === TEMPORARY FULL DEBUG DUMP ===
+	# Full debug dump
 	print("=== FULL WAYPOINT #", waypoints.size(), " DUMP ===")
 	print("  POS: ", point.pos)
 	print("  ROT: ", point.rot)
@@ -1993,6 +2735,7 @@ func _on_add_waypoint_pressed():
 	for key in point.states:
 		print("    ", key, " = ", point.states[key])
 	print("=== END DUMP ===\n")
+
 func load_waypoint(index: int):
 	if index < 0 or index >= waypoints.size(): return
 	var p = waypoints[index]
@@ -2050,7 +2793,15 @@ func sync_ui_to_shader():
 	
 	# Update Julia Toggle
 	%ASurfJuliaToggle.button_pressed = mat.get_shader_parameter("JuliaMode")
-
+	# Sync the Ribbon-specific sliders from shader params
+	var ws = mat.get_shader_parameter("WarpStrength")
+	if ws != null: set_s_val("%RibbonWarpStrengthSlider", ws)
+	
+	var wf = mat.get_shader_parameter("WarpFrequency")
+	if wf != null: set_s_val("%RibbonWarpFrequencySlider", wf)
+	
+	var rt = mat.get_shader_parameter("RibbonTwist")
+	if rt != null: set_s_val("%RibbonTwistSlider", rt)
 
 func play_flythrough():
 	print("--- DEBUG: Flythrough Starting ---")
@@ -2074,7 +2825,8 @@ func play_flythrough():
 	
 	# Smoothly reset all shader params to waypoint 1 values first
 	var reset_tween = create_tween().set_parallel(true).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
-	var mat_check = mat  # already have mat from above
+	var reset_tween_has_tweeners = false
+	var mat_check = mat
 	for param in first.floats:
 		if mat_check.get_shader_parameter(param) == null:
 			continue
@@ -2085,39 +2837,36 @@ func play_flythrough():
 		if typeof(current_val) != typeof(target_val):
 			mat_check.set_shader_parameter(param, target_val)
 			continue
+		reset_tween_has_tweeners = true
 		if current_val is Vector4:
-			var cv = current_val
-			var tv = target_val
+			var cv = current_val; var tv = target_val
 			reset_tween.tween_method(
-				func(t, c = cv, tg = tv, p = param):
+				func(t, c=cv, tg=tv, p=param):
 					mat_check.set_shader_parameter(p, Vector4(
-						lerp(c.x, tg.x, t), lerp(c.y, tg.y, t),
-						lerp(c.z, tg.z, t), lerp(c.w, tg.w, t)
-					)),
-				0.0, 1.0, 1.5
-			)
+						lerp(c.x,tg.x,t), lerp(c.y,tg.y,t),
+						lerp(c.z,tg.z,t), lerp(c.w,tg.w,t))),
+				0.0, 1.0, 1.5)
 		elif current_val is Vector3:
-			var cv = current_val
-			var tv = target_val
+			var cv = current_val; var tv = target_val
 			reset_tween.tween_method(
-				func(t, c = cv, tg = tv, p = param):
+				func(t, c=cv, tg=tv, p=param):
 					mat_check.set_shader_parameter(p, Vector3(
-						lerp(c.x, tg.x, t),
-						lerp(c.y, tg.y, t),
-						lerp(c.z, tg.z, t)
-					)),
-				0.0, 1.0, 1.5
-			)
+						lerp(c.x,tg.x,t), lerp(c.y,tg.y,t), lerp(c.z,tg.z,t))),
+				0.0, 1.0, 1.5)
 		else:
-			var cv = current_val
-			var tv = target_val
+			var cv = current_val; var tv = target_val
 			reset_tween.tween_method(
-				func(v, p = param): mat_check.set_shader_parameter(p, v),
-				cv, tv, 1.5
-			)
-	# Snap camera to first waypoint
+				func(v, p=param): mat_check.set_shader_parameter(p, v),
+				cv, tv, 1.5)
+
+	# Only snap camera and wait if there was actually something to tween
 	main_camera.global_position = first.pos
 	main_camera.global_transform.basis = first.rot
+
+	if reset_tween_has_tweeners:
+		await get_tree().create_timer(1.6).timeout
+	else:
+		reset_tween.kill()  # Destroy the empty tween to prevent the crash
 	
 	# Wait for the reset to finish before starting segments
 	await get_tree().create_timer(1.6).timeout
@@ -2125,21 +2874,35 @@ func play_flythrough():
 	# Now build sequential tween segment by segment
 	_play_segment(0, mat)
 
+const MENGER_PARAMS = ["MengerScale", "Iterations", "RotationAngle", "Detail", "MaxSteps",
+	"OffsetW", "JuliaMorph", "MengerOffset1", "JuliaSeed", "JuliaMode",
+	"Reflectivity", "FogDensity", "Brightness", "ColorCycle", "Saturation", 
+	"Contrast", "KIFS_Angle_X", "KIFS_Angle_Y", "KIFS_Angle_Z",
+	"SymmetryStrength", "F_offset",
+	"ShapeEnabled", "ShapeRadius", "ShapeThickness", "ShapeBend",
+	"ShapeOffset", "GrainIntensity", "TentacleCount", "TentacleLength", "TentacleTwist",
+	"ShapeType"]
+const MENGER_STATES = ["JuliaMode", "F_absX", "F_absY", "F_absZ", "F_X", "F_Y", "F_Z", "ShapeType", "ShapeEnabled"]
 func _play_segment(index: int, mat: ShaderMaterial):
 	if index >= waypoints.size() - 1:
-		
 		var last = waypoints[waypoints.size() - 1]
 		for param in last.floats:
+			if last.get("fractal_type", "") == "Menger" and param not in MENGER_PARAMS:
+				continue
 			if mat.get_shader_parameter(param) != null:
 				mat.set_shader_parameter(param, last.floats[param])
 		for state in last.states:
+			if last.get("fractal_type", "") == "Menger" and state not in MENGER_STATES:
+				continue
 			mat.set_shader_parameter(state, last.states[state])
 		await get_tree().create_timer(0.1).timeout
 		is_playing_flythrough = false
 		print("--- Flythrough Complete ---")
 		return
+		
+		
 
-	
+
 	var prev = waypoints[index]
 	var next = waypoints[index + 1]
 	var duration = 5.0
@@ -2149,10 +2912,8 @@ func _play_segment(index: int, mat: ShaderMaterial):
 
 	animation_tween = create_tween().set_parallel(true).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
 	
-	# Camera position
 	animation_tween.tween_property(main_camera, "global_position", next.pos, duration)
 	
-	# Camera rotation with captured values
 	var q_start = prev.rot.get_rotation_quaternion()
 	var q_end = next.rot.get_rotation_quaternion()
 	animation_tween.tween_method(
@@ -2161,14 +2922,16 @@ func _play_segment(index: int, mat: ShaderMaterial):
 		0.0, 1.0, duration
 	)
 	
-	# Shader params - tween FROM prev values TO next values
 	var mat_skip = []
 	for param in next.floats:
 		if mat.get_shader_parameter(param) == null:
 			mat_skip.append(param)
 	
-	# Shader params - tween FROM prev values TO next values
 	for param in next.floats:
+		# ✅ Skip params that don't belong to Menger
+		if next.get("fractal_type", "") == "Menger" and param not in MENGER_PARAMS:
+			continue
+			
 		var start_val = prev.floats.get(param, null)
 		var end_val = next.floats[param]
 		
@@ -2185,30 +2948,24 @@ func _play_segment(index: int, mat: ShaderMaterial):
 		print("   [TWEENING] ", param, ": ", start_val, " -> ", end_val)
 		var p_captured = param
 		
-		# Vector4 needs manual component interpolation
 		if start_val is Vector3:
 			var sv = start_val
 			var ev = end_val
 			animation_tween.tween_method(
 				func(t, s = sv, e = ev, pname = p_captured):
 					mat.set_shader_parameter(pname, Vector3(
-						lerp(s.x, e.x, t),
-						lerp(s.y, e.y, t),
-						lerp(s.z, e.z, t)
+						lerp(s.x, e.x, t), lerp(s.y, e.y, t), lerp(s.z, e.z, t)
 					)),
 				0.0, 1.0, duration
 			)
-		# Vector4 needs manual component interpolation
 		elif start_val is Vector4:
 			var sv = start_val
 			var ev = end_val
 			animation_tween.tween_method(
 				func(t, s = sv, e = ev, pname = p_captured):
 					mat.set_shader_parameter(pname, Vector4(
-						lerp(s.x, e.x, t),
-						lerp(s.y, e.y, t),
-						lerp(s.z, e.z, t),
-						lerp(s.w, e.w, t)
+						lerp(s.x, e.x, t), lerp(s.y, e.y, t),
+						lerp(s.z, e.z, t), lerp(s.w, e.w, t)
 					)),
 				0.0, 1.0, duration
 			)
@@ -2218,15 +2975,24 @@ func _play_segment(index: int, mat: ShaderMaterial):
 				start_val, end_val, duration
 			)
 	
-	# Snap states
+	# ✅ Skip states that don't belong to Menger
 	for state in next.states:
+		if next.get("fractal_type", "") == "Menger" and state not in MENGER_STATES:
+			continue
 		mat.set_shader_parameter(state, next.states[state])
 	
-	# When this segment finishes, play the next one
+	# Archon: remap stored state name to actual shader param name
+	# Archon: remap stored state name to actual shader param name
+	if next.states.has("ArchonWaveType"):
+		mat.set_shader_parameter("WaveType", next.states["ArchonWaveType"])
+	# Always explicitly set ArchonType — default to 0 (Organic) if not in waypoint
+	# This handles waypoints recorded before ArchonType was added to the dict
+	mat.set_shader_parameter("ArchonType", max(0, next.states.get("ArchonType", 0)))
+
+
 	var seq_tween = create_tween()
 	seq_tween.tween_interval(duration)
 	seq_tween.tween_callback(func(ni = index + 1, m = mat): _play_segment(ni, m))
-
 			
 func _on_clear_path_pressed():
 	waypoints.clear()
@@ -2262,25 +3028,61 @@ func _stitch_frames_to_video(save_path: String):
 	var global_rec_dir = ProjectSettings.globalize_path(recording_dir)
 	var input_path = global_rec_dir.path_join("frame_%05d.png")
 	
-	# Arguments used in your Fractility code
+	# 1. Determine the FFmpeg command path
+	var ffmpeg_command = "ffmpeg" # Default for Windows/Linux
+	
+	if OS.get_name() == "macOS":
+		# Search common Homebrew installation paths for Intel and Apple Silicon Macs
+		var mac_paths = [
+			"/opt/homebrew/bin/ffmpeg",  # Apple Silicon (M1/M2/M3)
+			"/usr/local/bin/ffmpeg",    # Intel Macs
+			"/usr/bin/ffmpeg"           # System default
+		]
+		
+		for path in mac_paths:
+			if FileAccess.file_exists(path):
+				ffmpeg_command = path
+				print("DEBUG: Found FFmpeg at Mac-specific path: ", path)
+				break
+	
+	# 2. Set up the conversion arguments
+	# -y: Overwrite existing file
+	# -framerate: Tells FFmpeg the input images represent 30fps
+	# -i: The input image sequence
+	# -c:v: Use H.264 codec
+	# -pix_fmt: Use yuv420p for maximum compatibility with players
+	# -r: Force the output video to strictly 30fps
 	var ffmpeg_args = [
 		"-y", 
-	"-framerate", "10", # Keep the input at 30
-	"-i", input_path, 
-	"-c:v", "libx264", 
-	"-pix_fmt", "yuv420p", 
-	"-r", "10", # ADD THIS: Force the output to strictly 30 FPS
-	save_path 
-]
+		"-framerate", "12", 
+		"-i", input_path, 
+		"-c:v", "libx264", 
+		"-pix_fmt", "yuv420p", 
+		"-r", "12", 
+		save_path 
+	]
+	
+	print("DEBUG: Executing FFmpeg command: ", ffmpeg_command)
 	
 	var output = []
-	var exit_code = OS.execute("ffmpeg", ffmpeg_args, output, true)
+	var exit_code = OS.execute(ffmpeg_command, ffmpeg_args, output, true)
 	
+	# 3. Handle result
 	if exit_code == 0:
-		print("Video saved successfully!")
-		OS.shell_open(save_path)
+		print("SUCCESS: Video saved successfully!")
+		# Automatically open the folder containing the new video
+		OS.shell_open(ProjectSettings.globalize_path(save_path.get_base_dir()))
 	else:
-		OS.alert("FFmpeg failed. Ensure FFmpeg is installed on your system.", "Export Error")
+		# Log the error for debugging
+		printerr("FFmpeg ERROR Code: ", exit_code)
+		for line in output:
+			printerr("FFmpeg Output: ", line)
+			
+		var err_msg = "FFmpeg failed (Code " + str(exit_code) + ")."
+		if OS.get_name() == "macOS" and ffmpeg_command == "ffmpeg":
+			err_msg += "\n\nMac users: Ensure FFmpeg is installed via Homebrew ('brew install ffmpeg')."
+			
+		OS.alert(err_msg, "Export Error")
 		
 func _on_record_timer_timeout():
 	if not is_recording: return
@@ -2378,38 +3180,31 @@ func save_preset(path: String):
 	var mat = get_fractal_material()
 	if not mat: return
 
-	# 1. Save Metadata
-	config.set_value("Metadata", "fractal_type", current_fractal)
-	config.set_value("Metadata", "shader_path", mat.shader.resource_path)
+	# ... (Metadata and Camera sections remain the same) ...
 
-	# 2. Save Camera
-	config.set_value("Camera", "pos", main_camera.global_position)
-	config.set_value("Camera", "basis", main_camera.global_transform.basis)
-
-	# 3. Save ALL Shader Parameters
-	var properties = mat.get_property_list()
-	for prop in properties:
-		var p_name = prop["name"]
-		if p_name.begins_with("shader_parameter/"):
-			var value = mat.get_shader_parameter(p_name.replace("shader_parameter/", ""))
-			if value != null:
-				config.set_value("ShaderParams", p_name, value)
-	
-	# 4. Save Special UI States (MOVED OUTSIDE THE LOOP)
+	# 4. Save Special UI States
 	config.set_value("UIState", "PaletteType", %PaletteSelector.selected if has_node("%PaletteSelector") else 0)
 	config.set_value("UIState", "TimeSpeed", %TimeSpeedSlider.value)
 	config.set_value("UIState", "IsParallel", %ParallelToggle.button_pressed)
 	
-	
-		# FORCE SAVE the actual picker colors (this bypasses the loop error)
+	# FORCE SAVE Color Pickers
 	if has_node("%ColorPicker1"):
 		config.set_value("ShaderParams", "shader_parameter/Color1", %ColorPicker1.color)
 	if has_node("%ColorPicker2"):
 		config.set_value("ShaderParams", "shader_parameter/Color2", %ColorPicker2.color)
 	if has_node("%ColorPicker3"):
 		config.set_value("ShaderParams", "shader_parameter/Color3", %ColorPicker3.color)
-	
-	
+
+	# --- FIXED SHAPE SETTINGS (Converted from Dictionary to ConfigValue) ---
+	# These are now correctly formatted for ConfigFile
+	config.set_value("UIState", "ShapeEnabled", %ShapeEnabledCheck.button_pressed)
+	var shape_type_val = %ShapeTypeButton.selected if has_node("%ShapeTypeButton") else 0
+	config.set_value("UIState", "ShapeType", max(0, shape_type_val))
+	config.set_value("UIState", "ShapeBend", %ShapeBendSlider.value)
+	config.set_value("UIState", "GrainIntensity", %GrainIntensitySlider.value)
+	config.set_value("UIState", "TentacleCount", %TentacleCountSlider.value)
+	config.set_value("UIState", "TentacleLength", %TentacleLengthSlider.value)
+	config.set_value("UIState", "TentacleTwist", %TentacleTwistSlider.value)
 	
 	config.set_value("UIState", "Contrast", %ContrastSlider.value if has_node("%ContrastSlider") else 1.0)
 
@@ -2417,7 +3212,43 @@ func save_preset(path: String):
 	var grad_tex = mat.get_shader_parameter("GradientTexture") 
 	if grad_tex and grad_tex is GradientTexture1D:
 		config.set_value("UIState", "CustomGradientData", grad_tex.gradient)
-
+	
+	
+	# === ARCHON ===
+	if current_fractal == "Archon":
+		config.set_value("Metadata", "shader_path", archon_shader.resource_path)
+		config.set_value("Metadata", "fractal_type", "Archon")
+		
+		if main_camera:
+			config.set_value("Camera", "pos",   main_camera.global_position)
+			config.set_value("Camera", "basis", main_camera.global_transform.basis)
+		
+		# Save every Archon-specific param explicitly so nothing is missed
+		var archon_params = [
+			"Scale","ArchonType", "Iterations", "Bailout", "TowerBias", "ArchonConstant",
+			"SpinStrength", "SpinAxis", "ArchFrequency", "ArchDepth", "ArchAxis",
+			"InvRadius", "InvStrength", "RotationAngle", "WRotationSpeed",
+			"MaxSteps", "Detail", "JuliaMode", "JuliaMorph", "JuliaSeed",
+			"WaveType", "WaveBlend",
+			"CityEnabled", "CellSize", "CellRotVariance", "CellConstantVariance",
+			"CellHeightVariance", "AlleyWidth",
+			"ShapeEnabled", "ShapeType", "ShapeRadius", "ShapeThickness",
+			"ShapeBend", "ShapeOffset", "GrainIntensity",
+			"TentacleCount", "TentacleLength", "TentacleTwist",
+			"F_absX", "F_absY", "F_absZ", "F_X", "F_Y", "F_Z",
+			"SymmetryStrength", "F_offset",
+			"KIFS_Angle_X", "KIFS_Angle_Y", "KIFS_Angle_Z"
+		]
+		var mat_save = get_fractal_material()
+		if mat_save:
+			for param in archon_params:
+				var val = mat_save.get_shader_parameter(param)
+				if val != null:
+					config.set_value("ArchonParams", param, val)
+	
+	
+	
+	
 	# 5. ACTUALLY SAVE (MOVED OUTSIDE THE LOOP)
 	var save_err = config.save(path)
 	if save_err == OK:
@@ -2429,6 +3260,61 @@ func load_preset(path: String):
 	var config = ConfigFile.new()
 	var err = config.load(path)
 	if err != OK: return
+	
+	
+	# === ARCHON ===
+	if config.get_value("Metadata", "fractal_type", "") == "Archon":
+		var mat_load = get_fractal_material()
+		if not mat_load:
+			print("ERROR: No material to load Archon preset into.")
+			return
+
+		# --- Step 1: Switch shader first, before touching any params ---
+		mat_load.shader = archon_shader
+		current_fractal = "Archon"
+
+		# --- Step 2: Clear the init flag so the UI sync is allowed ---
+		archon_initialized = false
+
+		# --- Step 3: Apply ALL params — scalars and vectors are both in ArchonParams ---
+		# ConfigFile natively preserves Vector3/Vector4 types so no separate
+		# section is needed. The [ArchonVectors] section was a mistake.
+		if config.has_section("ArchonParams"):
+			for key in config.get_section_keys("ArchonParams"):
+				var val = config.get_value("ArchonParams", key)
+				mat_load.set_shader_parameter(key, val)
+
+		# --- Step 5: Restore camera ---
+		if main_camera:
+			main_camera.global_position = config.get_value("Camera", "pos", Vector3(0, 0, 6))
+			var loaded_basis = config.get_value("Camera", "basis", Basis())
+			main_camera.global_transform.basis = loaded_basis
+			# Pass the loaded basis into the camera so its internal yaw/pitch
+			# variables match — do NOT call reset_internal_rotation here as
+			# that zeros them out and overrides the loaded orientation.
+			if main_camera.has_method("set_rotation_from_basis"):
+				main_camera.call("set_rotation_from_basis", loaded_basis)
+
+		# --- Step 6: Push shader state back to every UI slider ---
+		_sync_archon_ui_from_shader()
+
+		# --- Step 7: Lock in BEFORE selecting in tree ---
+		# Must be true before set_selected fires _on_tree_item_selected,
+		# otherwise it calls _sync_archon_to_shader() and wipes loaded values.
+		archon_initialized = true
+
+		# --- Step 8: Select Archon in nav tree to show the right tab ---
+		if has_node("%NavigationTree"):
+			var tree_root = %NavigationTree.get_root()
+			var archon_item = find_tree_item(tree_root, "Archon")
+			if archon_item:
+				%NavigationTree.set_selected(archon_item, 0)
+			if has_node("%TabContainer"):
+				%TabContainer.current_tab = 8
+
+		print("Archon preset loaded successfully.")
+		return  # Skip the generic sync below — Archon is fully handled
+
 
 	var mat = get_fractal_material()
 	
@@ -2438,9 +3324,11 @@ func load_preset(path: String):
 		mat.shader = load(new_path)
 		current_fractal = config.get_value("Metadata", "fractal_type", "Mandelbox")
 	
-	# 2. Restore Camera
-	main_camera.global_position = config.get_value("Camera", "pos")
-	main_camera.global_transform.basis = config.get_value("Camera", "basis")
+	# 2. FIXED: Restore Camera (With Safety Defaults)
+	# Adding Vector3 and Basis defaults prevents the 'Nil' crash
+	main_camera.global_position = config.get_value("Camera", "pos", Vector3(0, 0, 5)) 
+	main_camera.global_transform.basis = config.get_value("Camera", "basis", Basis())
+	
 	if main_camera.has_method("reset_internal_rotation"):
 		main_camera.call("reset_internal_rotation")
 
@@ -2454,6 +3342,28 @@ func load_preset(path: String):
 			
 			# Apply it to the material
 			mat.set_shader_parameter(clean_name, val)
+			
+	
+	
+	# --- 4. NEW: Restore Global Shape & U-Bend Settings ---
+	# We use has_section_key to avoid errors if loading an old preset
+	if config.has_section_key("UIState", "ShapeEnabled"):
+		var is_enabled = config.get_value("UIState", "ShapeEnabled", false)
+		if has_node("%ShapeEnabledCheck"):
+			%ShapeEnabledCheck.button_pressed = is_enabled
+			%ShapeEnabledCheck.toggled.emit(is_enabled) 
+
+	if config.has_section_key("UIState", "ShapeType"):
+		if has_node("%ShapeTypeButton"):
+			%ShapeTypeButton.selected = config.get_value("UIState", "ShapeType", 0)
+			mat.set_shader_parameter("ShapeType", %ShapeTypeButton.selected)
+
+# Use a helper to set values safely and avoid the 'null instance' error
+	set_slider_safe("%ShapeBendSlider", "UIState", "ShapeBend", config, 0.0)
+	set_slider_safe("%TentacleCountSlider", "UIState", "TentacleCount", config, 8.0)
+	set_slider_safe("%TentacleLengthSlider", "UIState", "TentacleLength", config, 0.5)
+	set_slider_safe("%TentacleTwistSlider", "UIState", "TentacleTwist", config, 1.0)
+	
 		
 	if config.has_section_key("UIState", "CustomGradientData"):
 		var grad_res = config.get_value("UIState", "CustomGradientData")
@@ -2477,17 +3387,18 @@ func load_preset(path: String):
 				_on_color_updated() 
 	%TimeSpeedSlider.value = config.get_value("UIState", "TimeSpeed", 0.5)
 	%ParallelToggle.button_pressed = config.get_value("UIState", "IsParallel", true)
-	%ZoomSlider.value = config.get_value("UIState", "Zoom", 4.5)
+	
 	
 	# Manually trigger the shader update after loading
 	_on_shader_param_changed(%TimeSpeedSlider.value, "time_speed")
 	_on_shader_param_changed(%ParallelToggle.button_pressed, "draw_parallel")
-	_on_shader_param_changed(%ZoomSlider.value, "zoom")
+	
 	print("Preset loaded with custom colors!")
 	
 	# IMPORTANT: Refresh the UI sliders to match the new values
 	sync_ui_to_shader()
-	print("Preset loaded successfully!")
+	
+	
 	
 	
 func _on_color_updated():
@@ -2507,10 +3418,7 @@ func _on_time_speed_slider_value_changed(value: float) -> void:
 	if mat:
 		mat.set_shader_parameter("time_speed", value)
 
-func _on_zoom_slider_value_changed(value: float) -> void:
-	var mat = get_fractal_material()
-	if mat:
-		mat.set_shader_parameter("zoom", value)
+
 
 func _on_parallel_toggle_toggled(toggled_on: bool) -> void:
 	var mat = get_fractal_material()
@@ -2542,11 +3450,10 @@ func change_fractal_type(new_type_name: String):
 func find_tree_item(parent: TreeItem, text: String) -> TreeItem:
 	if parent.get_text(0) == text:
 		return parent
-	var child = parent.get_children()
-	while child:
+	# Godot 4: get_children() returns Array[TreeItem], not a single item
+	for child in parent.get_children():
 		var found = find_tree_item(child, text)
 		if found: return found
-		child = child.get_next()
 	return null
 	
 func update_ui_to_match_shader():
@@ -2607,3 +3514,9 @@ func _process(delta: float):
 
 	# 2. If we are playing a flythrough, ensure the UI stays in sync 
 	# (Optional, but keeps sliders moving while you fly)
+func set_slider_safe(node_path: String, section: String, key: String, config: ConfigFile, default: float):
+	if has_node(node_path):
+		var slider = get_node(node_path)
+		slider.value = config.get_value(section, key, default)
+	else:
+		print("Warning: Slider ", node_path, " not found in UI.")

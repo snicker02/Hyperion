@@ -23,7 +23,7 @@ uniform float InvParamA : hint_range(-6.0, 6.0) = 0.5;
 uniform vec4 InvCenter = vec4(0.0);
 
 group_uniforms Rendering;
-uniform float Detail : hint_range(-5.0, -1.0) = -2.5;
+uniform float Detail : hint_range(-5.0, -1.0) = -1.0;
 uniform int MaxSteps : hint_range(32, 512) = 256;
 
 group_uniforms Fractal_Modes;
@@ -97,72 +97,115 @@ void shapeFold4D(inout vec4 p, inout float der) {
 
 // === MENGER SPONGE 4D DISTANCE ESTIMATOR ===
 float map(vec3 p3d, out vec4 orbit) {
-	// 1. Start with 4D point
-	vec4 p4d = vec4(p3d, OffsetW);
-	orbit = vec4(1e20);
+    vec4 p4d = vec4(p3d, OffsetW);
+    orbit = vec4(1e20);
+    vec3 z = p4d.xyz;
+    
+    float d = length(max(abs(z) - 1.5, 0.0));
+    float s = 1.0;
+    float d_recursive_shape = 1e10;  // ✅ declared here, before the loop
 
-	// 2. Calculate combined offset FIRST
-	vec4 combined_offset = mix(MengerOffset1, JuliaSeed, JuliaMorph);
+    vec4 combined_offset = mix(MengerOffset1, vec4(JuliaSeed.xyz, JuliaSeed.w), JuliaMorph);
 
-	// 3. Extract 3D position
-	vec3 z = p4d.xyz;
+    for (int i = 0; i < Iterations; i++) {
+        p4d = vec4(z, p4d.w);
 
-	// W-axis influence: Modulate the 3D position based on W component
-	float w_influence = p4d.w + combined_offset.w;
-	z += vec3(sin(w_influence), cos(w_influence), sin(w_influence * 0.7)) * 0.2;
+        if (abs(RotationAngle) > 0.001) {
+            p4d = rotate4D(p4d, RotationAngle);
+        }
 
-	// Apply offset translation
-	z -= combined_offset.xyz * 0.1;
+        kifs_fold(p4d, KIFS_Angle_X, KIFS_Angle_Y, KIFS_Angle_Z);
+        z = p4d.xyz;
+        apply_symmetry(z);
 
-	// Core Menger Sponge algorithm with KIFS inside the loop
-	float d = length(max(abs(z) - 1.5, 0.0));
-	float s = 1.0;
+        if (JuliaMode) {
+            z += combined_offset.xyz;
+            p4d.w += combined_offset.w;
+        }
 
-	for (int i = 0; i < Iterations; i++) {
-		// Rebuild 4D point for KIFS
-		p4d = vec4(z, p4d.w);
+        // ✅ Use full 4D position including W
+        vec4 a4 = abs(mod(p4d * s, 2.0) - 1.0);
+        vec3 a = a4.xyz;  // keep for orbit and shape
+        float s_current = s;
+        s *= MengerScale;
 
-		// Apply KIFS folding at each iteration
-		kifs_fold(p4d, KIFS_Angle_X, KIFS_Angle_Y, KIFS_Angle_Z);
+        // ✅ 4D Menger — 6 axis pairs instead of 3
+        vec4 r4 = abs(1.0 - MengerScale * a4);
+        float da = max(r4.x, r4.y);
+        float db = max(r4.y, r4.z);
+        float dc = max(r4.z, r4.x);
+        float dd = max(r4.x, r4.w);  // XW pair
+        float de = max(r4.y, r4.w);  // YW pair
+        float df = max(r4.z, r4.w);  // ZW pair
+        float c = (min(min(da, db), min(min(dc, dd), min(de, df))) - 1.0) / s;
 
-		// Apply 4D rotation if enabled
-		if (abs(RotationAngle) > 0.01) {
-			p4d = rotate4D(p4d, RotationAngle);
-		}
+        d = max(d, c);
+        orbit = min(orbit, vec4(abs(a), length(a)));
 
-		// Update z from folded 4D point
-		z = p4d.xyz;
+        if (ShapeEnabled) {
+            vec3 pa = a - vec3(0.333) - ShapeOffset;
+            float d_iter;
 
-		// Apply symmetry folding
-		apply_symmetry(z);
+            if (ShapeType == 0) {
+                // ShapeRadius = major radius, ShapeThickness = tube radius
+                d_iter = sdTorus(pa, vec2(ShapeRadius, ShapeThickness));
 
-		// Menger algorithm
-		vec3 a = mod(z * s, 2.0) - 1.0;
-		s *= MengerScale;
-		vec3 r = abs(1.0 - MengerScale * abs(a));
+            } else {
+                float len = ShapeRadius * 4.0;
+                float rad = ShapeThickness;
 
-		float da = max(r.x, r.y);
-		float db = max(r.y, r.z);
-		float dc = max(r.z, r.x);
-		float c = (min(da, min(db, dc)) - 1.0) / s;
+                // Bend
+                if (abs(ShapeBend) > 0.001)
+                    pa.y += ShapeBend * 0.1 * pa.z * pa.z;
 
-		d = max(d, c);
+                float cz = sdCylinderZ(pa.xyz, len, rad);
+                float cx = sdCylinderZ(pa.yzx, len, rad);
+                float cy = sdCylinderZ(pa.zxy, len, rad);
 
-		// Update orbit trap for coloring
-		orbit = min(orbit, vec4(abs(a), length(a)));
-	}
+                // ✅ Tentacles applied to each axis cylinder separately, 
+                // scaled up to match a-space
+                if (TentacleCount > 0.0) {
+                    float scale_factor = 1.0 / s_current;
+                    
+                    float az = atan(pa.y, pa.x);
+                    cz -= max(0.0, sin(az * TentacleCount + pa.z * TentacleTwist)) 
+                          * TentacleLength * scale_factor;
+                    
+                    float ax = atan(pa.z, pa.y);
+                    cx -= max(0.0, sin(ax * TentacleCount + pa.x * TentacleTwist)) 
+                          * TentacleLength * scale_factor;
+                    
+                    float ay = atan(pa.x, pa.z);
+                    cy -= max(0.0, sin(ay * TentacleCount + pa.y * TentacleTwist)) 
+                          * TentacleLength * scale_factor;
+                }
 
-	// Apply shape inversion if enabled
-	if (InvType > 0) {
-		float inv_radius = InvScale;
-		float r = length(z);
-		if (r < inv_radius) {
-			d *= inv_radius / r;
-		}
-	}
+                d_iter = min(cz, min(cx, cy));
+            }
 
-	return d * 0.8;
+            // Grain — scaled to a-space
+            if (GrainIntensity > 0.0) {
+                d_iter += sin((pa.x + pa.y + pa.z) * SurfScale * 10.0) 
+                          * 0.02 * GrainIntensity;
+            }
+
+            d_recursive_shape = min(d_recursive_shape, d_iter / s_current);
+        }
+    }
+
+
+    if (ShapeEnabled && d_recursive_shape < 1e9) {
+        float bbox = max(max(abs(p3d.x), abs(p3d.y)), abs(p3d.z)) - 1.5;
+        d = min(d, max(d_recursive_shape, bbox));
+    }
+
+    return d;
 }
+
+
+
+   
+
 
 // === NORMAL CALCULATION ===
 vec3 get_normal(vec3 p) {

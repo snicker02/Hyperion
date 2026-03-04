@@ -28,9 +28,9 @@ uniform vec3 SymmetryStrength = vec3(0.5);
 // Offset applied before/after folding
 uniform vec3 F_offset = vec3(0.0);
 
-uniform float KIFS_Angle_X : hint_range(0.0, 3.14) = 0.0;
-uniform float KIFS_Angle_Y : hint_range(0.0, 3.14) = 0.0;
-uniform float KIFS_Angle_Z : hint_range(0.0, 3.14) = 0.0;
+uniform float KIFS_Angle_X : hint_range(-3.14, 3.14) = 0.0;
+uniform float KIFS_Angle_Y : hint_range(-3.14, 3.14) = 0.0;
+uniform float KIFS_Angle_Z : hint_range(-3.14, 3.14) = 0.0;
 uniform vec3 KIFS_Axes = vec3(1.0, 1.0, 1.0); // The mask for X, Y, Z planes
 
 
@@ -57,6 +57,54 @@ uniform float SurfStrength : hint_range(0.0, 2.0) = 0.0;
 uniform int SurfOctaves : hint_range(1, 8) = 1;
 uniform float SurfRoughness : hint_range(0.0, 1.0) = 0.0;
 uniform float SurfSpeed : hint_range(0.0, 2.0) = 0.0; 
+uniform bool TorusEnabled = false;
+uniform float TorusRadius : hint_range(0.1, 10.0) = 2.5;
+uniform float TorusTube : hint_range(0.01, 2.0) = 0.4;
+uniform vec3 TorusOffset = vec3(0.0, 0.0, 0.0);
+uniform float GrainIntensity : hint_range(0.0, 1.0) = 0.0;
+uniform float TentacleCount : hint_range(0.0, 50.0) = 0.0;
+uniform float TentacleLength : hint_range(0.0, 2.0) = 0.0;
+uniform float TentacleTwist : hint_range(-5.0, 5.0) = 0.0;
+group_uniforms Global_Shapes;
+uniform int ShapeType : hint_range(0, 1) = 0; // 0 = Torus, 1 = Cylinder
+uniform bool ShapeEnabled = false;
+uniform float ShapeRadius : hint_range(0.1, 5.0) = 1.0;
+uniform float ShapeThickness : hint_range(0.01, 2.0) = 0.4;
+uniform float ShapeBend : hint_range(0.0, 2.0) = 0.0;
+uniform vec3 ShapeOffset = vec3(0.0);
+
+
+
+
+
+// Global Helper
+float sdTorus(vec3 p, vec2 t) {
+    vec2 q = vec2(length(p.xz) - t.x, p.y);
+    return length(q) - t.y;
+}
+
+
+// Helper: Capped Cylinder
+// Standard Y-Axis Cylinder
+float sdCylinder(vec3 p, float h, float r) {
+    vec2 d = abs(vec2(length(p.xz), p.y)) - vec2(r, h);
+    return min(max(d.x, d.y), 0.0) + length(max(d, 0.0));
+}
+
+// Your preferred Z-Axis Cylinder for "Amazing Surf"
+float sdCylinderZ(vec3 p, float h, float r) {
+    vec2 d = abs(vec2(length(p.xy), p.z)) - vec2(r, h);
+    return min(max(d.x, d.y), 0.0) + length(max(d, 0.0));
+}
+
+
+vec3 applyUBendZ(vec3 p, float k) {
+    if (abs(k) < 0.001) return p;
+    // We bend the XY plane based on the square of Z to create the "U" arc
+    float bend_factor = k * p.z * p.z;
+    return vec3(p.x, p.y + bend_factor, p.z);
+}
+
 
 
 vec3 palette(float t) {

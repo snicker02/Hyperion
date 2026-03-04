@@ -41,6 +41,16 @@ func _input(event):
 		rotation_x = clamp(rotation_x, -90, 90)
 		rotation_degrees = Vector3(rotation_x, rotation_y, 0)
 
+func set_rotation_from_basis(b: Basis):
+	var euler = b.get_euler()
+	rotation_x = rad_to_deg(euler.x)
+	rotation_y = rad_to_deg(euler.y)
+	rotation_degrees = Vector3(rotation_x, rotation_y, 0)
+
+func _ready():
+	near = 0.001
+	far = 4000.0
+
 func _process(delta):
 
 
